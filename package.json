@@ -1,8 +1,8 @@
 {
   "name": "google-ads-scraper",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A web-based tool for scraping Google Ads Transparency data",
-  "main": "src/server.js",
+  "main": "src/simple-server.js",
   "scripts": {
     "start": "node src/simple-server.js",
     "start:minimal": "node src/minimal-server.js",
