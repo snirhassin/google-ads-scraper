@@ -4,11 +4,11 @@
   "description": "A web-based tool for scraping Google Ads Transparency data",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/minimal-server.js",
+    "start": "node src/simple-server.js",
+    "start:minimal": "node src/minimal-server.js",
     "start:full": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test": "jest",
-    "build": "echo 'No build step required'"
+    "test": "jest"
   },
   "engines": {
     "node": ">=20.18.1"
