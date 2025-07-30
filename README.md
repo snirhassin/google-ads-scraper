@@ -21,7 +21,9 @@ A web-based tool for scraping and analyzing Google Ads Transparency data with a 
 1. Click the "Deploy on Railway" button above
 2. Connect your GitHub account and fork this repository
 3. Railway will automatically deploy your app
-4. Set `NODE_ENV=production` in Railway environment variables
+4. Set environment variables in Railway:
+   - `NODE_ENV=production`
+   - `FIRECRAWL_API_KEY=your_api_key_here`
 5. Access your deployed app at the provided Railway URL
 
 ### Local Development
@@ -52,8 +54,8 @@ npm run dev
 
 ## Requirements
 
-- Node.js 14+
-- Chrome/Chromium browser (for Puppeteer)
+- Node.js 18+
+- Firecrawl API key (get one at [firecrawl.dev](https://firecrawl.dev))
 
 ## License
 

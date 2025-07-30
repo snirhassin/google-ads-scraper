@@ -1,0 +1,18 @@
+{
+  "name": "Google Ads Transparency Scraper",
+  "description": "A web-based tool for scraping Google Ads Transparency data with real-time progress tracking and Excel export",
+  "repository": "https://github.com/snirhassin/google-ads-scraper",
+  "services": [
+    {
+      "name": "google-ads-scraper",
+      "source": {
+        "repo": "snirhassin/google-ads-scraper"
+      },
+      "variables": {
+        "NODE_ENV": "production",
+        "PUPPETEER_EXECUTABLE_PATH": "/usr/bin/chromium-browser",
+        "PUPPETEER_SKIP_CHROMIUM_DOWNLOAD": "true"
+      }
+    }
+  ]
+}

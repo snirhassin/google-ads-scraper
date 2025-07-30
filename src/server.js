@@ -3,7 +3,7 @@ const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
 const cors = require('cors');
-const AdsScraper = require('./scraper');
+const FirecrawlAdsScraper = require('./firecrawl-scraper');
 
 const app = express();
 const server = http.createServer(app);
@@ -51,7 +51,7 @@ io.on('connection', (socket) => {
     const { url } = data;
     
     try {
-      const scraper = new AdsScraper(socket);
+      const scraper = new FirecrawlAdsScraper(socket);
       scraperInstances.set(socket.id, scraper);
       
       await scraper.scrapeTransparencyPage(url);
@@ -78,7 +78,7 @@ io.on('connection', (socket) => {
     console.log('Client disconnected:', socket.id);
     const scraper = scraperInstances.get(socket.id);
     if (scraper) {
-      scraper.cleanup();
+      scraper.stop();
       scraperInstances.delete(socket.id);
     }
   });

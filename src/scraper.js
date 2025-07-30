@@ -16,25 +16,44 @@ class AdsScraper {
     try {
       this.socket.emit('status-update', { message: 'Launching browser...' });
       
+      const isProduction = process.env.NODE_ENV === 'production';
+      
       this.browser = await puppeteer.launch({
-        headless: process.env.NODE_ENV === 'production' ? 'new' : false,
+        headless: isProduction ? 'new' : false,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
-          '--disable-blink-features=AutomationControlled',
-          '--disable-web-security',
-          '--disable-features=VizDisplayCompositor',
           '--disable-dev-shm-usage',
-          '--disable-gpu',
+          '--disable-accelerated-2d-canvas',
           '--no-first-run',
           '--no-zygote',
-          '--single-process',
+          '--disable-gpu',
+          '--disable-web-security',
+          '--disable-features=VizDisplayCompositor',
           '--disable-background-timer-throttling',
           '--disable-backgrounding-occluded-windows',
-          '--disable-renderer-backgrounding'
+          '--disable-renderer-backgrounding',
+          '--disable-blink-features=AutomationControlled',
+          '--disable-ipc-flooding-protection',
+          '--disable-extensions',
+          '--disable-plugins',
+          '--disable-default-apps',
+          '--disable-component-extensions-with-background-pages',
+          '--disable-client-side-phishing-detection',
+          '--disable-sync',
+          '--disable-background-networking',
+          '--disable-translate',
+          '--hide-scrollbars',
+          '--mute-audio',
+          '--no-default-browser-check',
+          '--no-pings',
+          '--password-store=basic',
+          '--use-mock-keychain',
+          '--single-process'
         ],
-        defaultViewport: { width: 1280, height: 800 },
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
+        defaultViewport: { width: 1920, height: 1080 },
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+        timeout: 60000
       });
 
       this.page = await this.browser.newPage();
