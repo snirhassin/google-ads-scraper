@@ -37,10 +37,16 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Minimal server listening on 0.0.0.0:${PORT}`);
   console.log(`🌐 Should be accessible at: https://${process.env.RAILWAY_PUBLIC_DOMAIN}/`);
   
-  // Keep the process alive
+  // Signal that we're ready
+  if (process.send) {
+    process.send('ready');
+  }
+  
+  // Keep the process alive with immediate first heartbeat
+  console.log(`💓 Server heartbeat - ${new Date().toISOString()}`);
   setInterval(() => {
     console.log(`💓 Server heartbeat - ${new Date().toISOString()}`);
-  }, 30000);
+  }, 15000);
 });
 
 server.on('error', (error) => {
@@ -59,13 +65,18 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Unhandled Rejection:', reason);
 });
 
-// Handle graceful shutdown
+// Handle graceful shutdown - but delay to see if Railway retries
 process.on('SIGTERM', () => {
-  console.log('📴 SIGTERM received, shutting down gracefully...');
-  server.close(() => {
-    console.log('✅ Server closed');
-    process.exit(0);
-  });
+  console.log('📴 SIGTERM received - Railway is trying to stop the container');
+  console.log('⏳ Waiting 5 seconds to see if this is a health check issue...');
+  
+  setTimeout(() => {
+    console.log('📴 Proceeding with graceful shutdown...');
+    server.close(() => {
+      console.log('✅ Server closed');
+      process.exit(0);
+    });
+  }, 5000);
 });
 
 process.on('SIGINT', () => {
