@@ -17,15 +17,24 @@ class AdsScraper {
       this.socket.emit('status-update', { message: 'Launching browser...' });
       
       this.browser = await puppeteer.launch({
-        headless: false,
+        headless: process.env.NODE_ENV === 'production' ? 'new' : false,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-blink-features=AutomationControlled',
           '--disable-web-security',
-          '--disable-features=VizDisplayCompositor'
+          '--disable-features=VizDisplayCompositor',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--no-first-run',
+          '--no-zygote',
+          '--single-process',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding'
         ],
-        defaultViewport: { width: 1280, height: 800 }
+        defaultViewport: { width: 1280, height: 800 },
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
       });
 
       this.page = await this.browser.newPage();

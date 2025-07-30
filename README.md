@@ -12,20 +12,26 @@ A web-based tool for scraping and analyzing Google Ads Transparency data with a 
 - **Excel Export**: Download scraped data as Excel files
 - **Real-time Updates**: WebSocket-based live updates
 
-## Installation
+## Deployment
+
+### Deploy to Railway
+
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/your-template-id)
+
+1. Click the "Deploy on Railway" button above
+2. Connect your GitHub account and fork this repository
+3. Railway will automatically deploy your app
+4. Set `NODE_ENV=production` in Railway environment variables
+5. Access your deployed app at the provided Railway URL
+
+### Local Development
 
 ```bash
 npm install
-```
-
-## Usage
-
-1. Start the server:
-```bash
 npm start
 ```
 
-2. Open your browser and navigate to `http://localhost:3000`
+Open your browser and navigate to `http://localhost:3000`
 
 3. Enter a Google Ads Transparency URL (e.g., `https://adstransparency.google.com/?region=anywhere&domain=example.com`)
 
