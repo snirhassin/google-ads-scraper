@@ -1,4 +1,14 @@
-const FirecrawlApp = require('@mendable/firecrawl-js').default;
+// Handle both CommonJS and ES module imports
+let FirecrawlApp;
+try {
+  // Try ES module style first
+  const firecrawlModule = require('@mendable/firecrawl-js');
+  FirecrawlApp = firecrawlModule.default || firecrawlModule.FirecrawlApp || firecrawlModule;
+  console.log('✅ Firecrawl module loaded successfully');
+} catch (error) {
+  console.error('❌ Failed to load Firecrawl module:', error.message);
+  throw error;
+}
 const cheerio = require('cheerio');
 const XLSX = require('xlsx');
 

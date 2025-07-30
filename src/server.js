@@ -3,7 +3,16 @@ const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
 const cors = require('cors');
-const FirecrawlAdsScraper = require('./firecrawl-scraper');
+
+// Import with error handling
+let FirecrawlAdsScraper;
+try {
+  FirecrawlAdsScraper = require('./firecrawl-scraper');
+  console.log('✅ Firecrawl scraper loaded successfully');
+} catch (error) {
+  console.error('❌ Failed to load Firecrawl scraper:', error.message);
+  process.exit(1);
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -21,7 +30,12 @@ app.use(express.static(path.join(__dirname, '../public')));
 const scraperInstances = new Map();
 
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, '../public/index.html'));
+  try {
+    res.sendFile(path.join(__dirname, '../public/index.html'));
+  } catch (error) {
+    console.error('Error serving index.html:', error);
+    res.status(500).send('Server Error');
+  }
 });
 
 app.get('/export-excel', async (req, res) => {
@@ -85,6 +99,37 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+const HOST = process.env.HOST || '0.0.0.0';
+
+console.log('🚀 Starting Google Ads Scraper server...');
+console.log('📦 Environment:', process.env.NODE_ENV || 'development');
+console.log('🔑 Firecrawl API Key:', process.env.FIRECRAWL_API_KEY ? 'Set ✅' : 'Missing ❌');
+
+server.listen(PORT, HOST, () => {
+  console.log(`✅ Server running on http://${HOST}:${PORT}`);
+  console.log('🎯 Health check available at /health');
+  console.log('🌐 Ready to accept connections');
+});
+
+// Add health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'healthy', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
+// Handle server errors
+server.on('error', (error) => {
+  console.error('Server error:', error);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
