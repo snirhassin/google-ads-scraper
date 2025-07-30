@@ -1,13 +1,15 @@
 const express = require('express');
 
 const app = express();
-const PORT = process.env.PORT || process.env.SERVER_PORT || 8080;
+const PORT = parseInt(process.env.PORT) || 3000;
 
 console.log('🚀 Starting minimal test server...');
 console.log('📦 Node version:', process.version);
 console.log('📦 Environment:', process.env.NODE_ENV || 'development');
-console.log('🔌 Port:', PORT);
-console.log('🔌 All env vars:', JSON.stringify(process.env, null, 2));
+console.log('🔌 Port (raw):', process.env.PORT);
+console.log('🔌 Port (parsed):', PORT);
+console.log('🔌 Railway Domain:', process.env.RAILWAY_PUBLIC_DOMAIN);
+console.log('🔑 Firecrawl API Key:', process.env.FIRECRAWL_API_KEY ? 'Set ✅' : 'Missing ❌');
 
 // Basic health check
 app.get('/', (req, res) => {
@@ -33,10 +35,20 @@ app.get('/test', (req, res) => {
 
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Minimal server listening on 0.0.0.0:${PORT}`);
+  console.log(`🌐 Should be accessible at: https://${process.env.RAILWAY_PUBLIC_DOMAIN}/`);
+  
+  // Keep the process alive
+  setInterval(() => {
+    console.log(`💓 Server heartbeat - ${new Date().toISOString()}`);
+  }, 30000);
 });
 
 server.on('error', (error) => {
   console.error('❌ Server error:', error);
+  if (error.code === 'EADDRINUSE') {
+    console.log(`❌ Port ${PORT} is already in use`);
+    process.exit(1);
+  }
 });
 
 process.on('uncaughtException', (error) => {
