@@ -1,12 +1,13 @@
 const express = require('express');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || process.env.SERVER_PORT || 8080;
 
 console.log('🚀 Starting minimal test server...');
 console.log('📦 Node version:', process.version);
 console.log('📦 Environment:', process.env.NODE_ENV || 'development');
 console.log('🔌 Port:', PORT);
+console.log('🔌 All env vars:', JSON.stringify(process.env, null, 2));
 
 // Basic health check
 app.get('/', (req, res) => {
@@ -44,4 +45,21 @@ process.on('uncaughtException', (error) => {
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Unhandled Rejection:', reason);
+});
+
+// Handle graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('📴 SIGTERM received, shutting down gracefully...');
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('📴 SIGINT received, shutting down gracefully...');
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
 });
