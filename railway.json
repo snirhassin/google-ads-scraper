@@ -9,5 +9,8 @@
     "healthcheckTimeout": 100,
     "restartPolicyType": "on_failure",
     "restartPolicyMaxRetries": 10
+  },
+  "variables": {
+    "NODE_ENV": "production"
   }
 }

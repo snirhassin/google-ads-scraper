@@ -13,3 +13,8 @@ coverage/
 .nyc_output/
 dist/
 build/
+
+# API Keys and Secrets
+.env.production
+.env.staging
+railway.env
