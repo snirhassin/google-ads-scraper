@@ -4,13 +4,13 @@ const socketIo = require('socket.io');
 const path = require('path');
 const cors = require('cors');
 
-// Import with error handling
-let FirecrawlAdsScraper;
+// Import with error handling - SerpAPI scraper (replaces Firecrawl)
+let AdsScraper;
 try {
-  FirecrawlAdsScraper = require('./firecrawl-scraper');
-  console.log('✅ Firecrawl scraper loaded successfully');
+  AdsScraper = require('./serpapi-scraper');
+  console.log('✅ SerpAPI scraper loaded successfully');
 } catch (error) {
-  console.error('❌ Failed to load Firecrawl scraper:', error.message);
+  console.error('❌ Failed to load SerpAPI scraper:', error.message);
   process.exit(1);
 }
 
@@ -65,7 +65,7 @@ io.on('connection', (socket) => {
     const { url } = data;
     
     try {
-      const scraper = new FirecrawlAdsScraper(socket);
+      const scraper = new AdsScraper(socket);
       scraperInstances.set(socket.id, scraper);
       
       await scraper.scrapeTransparencyPage(url);
@@ -103,7 +103,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 
 console.log('🚀 Starting Google Ads Scraper server...');
 console.log('📦 Environment:', process.env.NODE_ENV || 'development');
-console.log('🔑 Firecrawl API Key:', process.env.FIRECRAWL_API_KEY ? 'Set ✅' : 'Missing ❌');
+console.log('🔑 SerpAPI Key:', process.env.SERPAPI_API_KEY ? 'Set ✅' : 'Missing ❌');
 
 server.listen(PORT, HOST, () => {
   console.log(`✅ Server running on http://${HOST}:${PORT}`);
