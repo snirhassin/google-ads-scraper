@@ -156,16 +156,47 @@ function transformAdCreative(creative) {
     : 'Present';
 
   return {
+    // Identifiers
     id: creative.ad_creative_id || `serpapi_${Date.now()}_${Math.random()}`,
-    advertiser: creative.advertiser || 'Unknown Advertiser',
     advertiserId: creative.advertiser_id || '',
     creativeId: creative.ad_creative_id || '',
-    url: creative.details_link || '',
+
+    // Advertiser info
+    advertiser: creative.advertiser || 'Unknown Advertiser',
+    advertiserLocation: creative.advertiser_location || '',
+    advertiserVerified: creative.advertiser_verified || false,
+
+    // Ad content - TEXT & DESCRIPTIONS
+    headline: creative.headline || creative.title || '',
+    text: creative.text || '',
+    description: creative.description || '',
+    callToAction: creative.call_to_action || '',
+
+    // URLs
+    destinationUrl: creative.destination_url || creative.landing_page || '',
+    displayUrl: creative.display_url || '',
+    detailsLink: creative.details_link || '',
+
+    // Media
     image: creative.image || null,
+    imageUrl: creative.image_url || creative.image || null,
+    videoUrl: creative.video_url || null,
+
+    // Metadata
     format: mapFormat(creative.format),
+    adType: creative.ad_type || creative.format || '',
     dateRange: `${firstShown} - ${lastShown}`,
-    firstShown: creative.first_shown,
-    lastShown: creative.last_shown
+    firstShown: firstShown,
+    lastShown: lastShown,
+    firstShownTimestamp: creative.first_shown,
+    lastShownTimestamp: creative.last_shown,
+
+    // Targeting
+    regions: creative.regions || [],
+    targetedRegions: creative.targeted_regions || [],
+
+    // Raw data for anything we might have missed
+    rawData: creative
   };
 }
 
@@ -184,8 +215,11 @@ function mapFormat(format) {
 function isValidAd(ad) {
   return ad && (
     (ad.advertiser && ad.advertiser !== 'Unknown Advertiser') ||
-    ad.url ||
-    ad.image
+    ad.detailsLink ||
+    ad.destinationUrl ||
+    ad.image ||
+    ad.text ||
+    ad.headline
   );
 }
 

@@ -50,6 +50,7 @@
                     <h3>Scraped Ads Data (<span id="total-count">0</span> ads)</h3>
                     <div class="results-actions">
                         <button id="export-excel-btn" class="btn btn-success">Export to Excel</button>
+                        <button id="export-json-btn" class="btn btn-primary">Export JSON</button>
                         <button id="clear-results-btn" class="btn btn-secondary">Clear Results</button>
                     </div>
                 </div>
@@ -57,12 +58,14 @@
                     <table id="results-table">
                         <thead>
                             <tr>
-                                <th>Advertiser</th>
-                                <th>Advertiser ID</th>
-                                <th>Creative ID</th>
-                                <th>Format</th>
                                 <th>Image</th>
+                                <th>Advertiser</th>
+                                <th>Ad Text / Headline</th>
+                                <th>Description</th>
+                                <th>Destination URL</th>
+                                <th>Format</th>
                                 <th>Date Range</th>
+                                <th>Details</th>
                             </tr>
                         </thead>
                         <tbody id="results-tbody">
@@ -97,6 +100,7 @@
 
         startBtn.addEventListener('click', startScraping);
         document.getElementById('export-excel-btn').addEventListener('click', exportToExcel);
+        document.getElementById('export-json-btn').addEventListener('click', exportToJson);
         document.getElementById('clear-results-btn').addEventListener('click', clearResults);
         document.getElementById('retry-btn').addEventListener('click', () => {
             errorSection.style.display = 'none';
@@ -152,7 +156,7 @@
             totalCount.textContent = scrapedAds.length;
 
             if (scrapedAds.length === 0) {
-                resultsTableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #666;">No ads found</td></tr>';
+                resultsTableBody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #666;">No ads found</td></tr>';
                 resultsSection.style.display = 'block';
                 return;
             }
@@ -160,17 +164,40 @@
             scrapedAds.forEach(ad => {
                 const row = document.createElement('tr');
 
-                const imageHtml = ad.image
-                    ? `<img src="${ad.image}" alt="Ad" style="width: 60px; height: 60px; object-fit: cover; border-radius: 4px;" onerror="this.style.display='none'">`
+                // Image
+                const imageHtml = ad.image || ad.imageUrl
+                    ? `<img src="${ad.image || ad.imageUrl}" alt="Ad" class="ad-thumbnail" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2260%22 height=%2260%22><rect fill=%22%23f0f0f0%22 width=%2260%22 height=%2260%22/><text x=%2230%22 y=%2235%22 text-anchor=%22middle%22 fill=%22%23999%22 font-size=%2210%22>No img</text></svg>'">`
+                    : '<span class="no-image">-</span>';
+
+                // Ad text (headline or text)
+                const adText = ad.headline || ad.text || '-';
+
+                // Description
+                const description = ad.description || '-';
+
+                // Destination URL
+                const destUrl = ad.destinationUrl || ad.displayUrl || '-';
+                const destUrlHtml = destUrl !== '-'
+                    ? `<a href="${destUrl}" target="_blank" rel="noopener" class="dest-url">${truncateUrl(destUrl, 40)}</a>`
+                    : '-';
+
+                // Details link
+                const detailsHtml = ad.detailsLink
+                    ? `<a href="${ad.detailsLink}" target="_blank" rel="noopener" class="btn btn-small">View</a>`
                     : '-';
 
                 row.innerHTML = `
-                    <td><strong>${escapeHtml(ad.advertiser)}</strong></td>
-                    <td><code>${escapeHtml(ad.advertiserId || '-')}</code></td>
-                    <td><code style="font-size: 10px;">${escapeHtml(ad.creativeId || '-')}</code></td>
-                    <td><span class="badge badge-${ad.format.toLowerCase()}">${ad.format}</span></td>
                     <td>${imageHtml}</td>
-                    <td>${ad.dateRange}</td>
+                    <td>
+                        <strong>${escapeHtml(ad.advertiser)}</strong>
+                        <div class="sub-info">${escapeHtml(ad.advertiserId || '')}</div>
+                    </td>
+                    <td class="text-cell">${escapeHtml(adText)}</td>
+                    <td class="text-cell">${escapeHtml(description)}</td>
+                    <td class="url-cell">${destUrlHtml}</td>
+                    <td><span class="badge badge-${(ad.format || 'unknown').toLowerCase()}">${ad.format || 'Unknown'}</span></td>
+                    <td class="date-cell">${ad.dateRange || '-'}</td>
+                    <td>${detailsHtml}</td>
                 `;
 
                 resultsTableBody.appendChild(row);
@@ -185,29 +212,107 @@
                 return;
             }
 
+            // Comprehensive Excel export with ALL fields
             const wsData = [
-                ['Advertiser', 'Advertiser ID', 'Creative ID', 'Format', 'Image URL', 'Date Range', 'Details URL', 'Scraped At']
+                [
+                    'Advertiser',
+                    'Advertiser ID',
+                    'Advertiser Location',
+                    'Advertiser Verified',
+                    'Creative ID',
+                    'Headline',
+                    'Ad Text',
+                    'Description',
+                    'Call To Action',
+                    'Destination URL',
+                    'Display URL',
+                    'Details Link',
+                    'Image URL',
+                    'Video URL',
+                    'Format',
+                    'Ad Type',
+                    'First Shown',
+                    'Last Shown',
+                    'Regions',
+                    'Scraped At'
+                ]
             ];
 
             scrapedAds.forEach(ad => {
                 wsData.push([
-                    ad.advertiser,
-                    ad.advertiserId,
-                    ad.creativeId,
-                    ad.format,
-                    ad.image || '',
-                    ad.dateRange,
-                    ad.url,
+                    ad.advertiser || '',
+                    ad.advertiserId || '',
+                    ad.advertiserLocation || '',
+                    ad.advertiserVerified ? 'Yes' : 'No',
+                    ad.creativeId || '',
+                    ad.headline || '',
+                    ad.text || '',
+                    ad.description || '',
+                    ad.callToAction || '',
+                    ad.destinationUrl || '',
+                    ad.displayUrl || '',
+                    ad.detailsLink || '',
+                    ad.image || ad.imageUrl || '',
+                    ad.videoUrl || '',
+                    ad.format || '',
+                    ad.adType || '',
+                    ad.firstShown || '',
+                    ad.lastShown || '',
+                    Array.isArray(ad.regions) ? ad.regions.join(', ') : (ad.regions || ''),
                     new Date().toLocaleString()
                 ]);
             });
 
             const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+            // Set column widths
+            ws['!cols'] = [
+                { wch: 25 }, // Advertiser
+                { wch: 25 }, // Advertiser ID
+                { wch: 15 }, // Location
+                { wch: 10 }, // Verified
+                { wch: 25 }, // Creative ID
+                { wch: 40 }, // Headline
+                { wch: 50 }, // Ad Text
+                { wch: 50 }, // Description
+                { wch: 15 }, // CTA
+                { wch: 50 }, // Destination URL
+                { wch: 30 }, // Display URL
+                { wch: 60 }, // Details Link
+                { wch: 60 }, // Image URL
+                { wch: 60 }, // Video URL
+                { wch: 10 }, // Format
+                { wch: 10 }, // Ad Type
+                { wch: 12 }, // First Shown
+                { wch: 12 }, // Last Shown
+                { wch: 20 }, // Regions
+                { wch: 20 }, // Scraped At
+            ];
+
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'Scraped Ads');
 
             const timestamp = new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-');
-            XLSX.writeFile(wb, `google-ads-${timestamp}.xlsx`);
+            XLSX.writeFile(wb, `google-ads-full-${timestamp}.xlsx`);
+        }
+
+        function exportToJson() {
+            if (scrapedAds.length === 0) {
+                showError('No data to export');
+                return;
+            }
+
+            const dataStr = JSON.stringify(scrapedAds, null, 2);
+            const blob = new Blob([dataStr], { type: 'application/json' });
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            const timestamp = new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-');
+            link.download = `google-ads-${timestamp}.json`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(url);
         }
 
         function clearResults() {
@@ -223,9 +328,15 @@
         }
 
         function escapeHtml(text) {
+            if (!text) return '';
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        function truncateUrl(url, maxLength) {
+            if (!url || url.length <= maxLength) return url;
+            return url.substring(0, maxLength) + '...';
         }
     </script>
 
@@ -269,15 +380,102 @@
         .badge {
             padding: 4px 8px;
             border-radius: 12px;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 600;
             text-transform: uppercase;
+            white-space: nowrap;
         }
 
         .badge-text { background: #e3f2fd; color: #1976d2; }
         .badge-display { background: #f3e5f5; color: #7b1fa2; }
         .badge-video { background: #e8f5e9; color: #388e3c; }
+        .badge-image { background: #fff3e0; color: #e65100; }
         .badge-unknown { background: #f5f5f5; color: #666; }
+
+        .ad-thumbnail {
+            width: 60px;
+            height: 60px;
+            object-fit: cover;
+            border-radius: 4px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .no-image {
+            display: inline-block;
+            width: 60px;
+            height: 60px;
+            line-height: 60px;
+            text-align: center;
+            background: #f5f5f5;
+            border-radius: 4px;
+            color: #999;
+        }
+
+        .sub-info {
+            font-size: 10px;
+            color: #888;
+            margin-top: 4px;
+            word-break: break-all;
+        }
+
+        .text-cell {
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-size: 13px;
+        }
+
+        .url-cell {
+            max-width: 150px;
+        }
+
+        .dest-url {
+            font-size: 12px;
+            color: #1976d2;
+            word-break: break-all;
+        }
+
+        .date-cell {
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .btn-small {
+            padding: 4px 8px;
+            font-size: 11px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .btn-small:hover {
+            opacity: 0.9;
+        }
+
+        #results-table {
+            font-size: 13px;
+        }
+
+        #results-table th {
+            position: sticky;
+            top: 0;
+            background: #f8f9fa;
+            z-index: 1;
+        }
+
+        .results-table-container {
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .results-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
     </style>
 </body>
 </html>
