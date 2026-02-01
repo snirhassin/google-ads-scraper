@@ -178,8 +178,8 @@
                 // Description/Snippet
                 const descSnippet = ad.description || ad.text || '-';
 
-                // Show OCR badge if text was extracted via OCR
-                const ocrBadge = ad.ocrProcessed ? '<span class="ocr-badge">OCR</span>' : '';
+                // Show badge if text was extracted via Claude vision
+                const visionBadge = ad.visionProcessed ? '<span class="vision-badge">AI</span>' : '';
 
                 // Visible link / destination URL
                 const visibleLink = ad.visibleLink || ad.displayUrl || ad.destinationUrl || '';
@@ -192,9 +192,9 @@
                     ? `<a href="${ad.detailsLink}" target="_blank" rel="noopener" class="btn btn-small">View</a>`
                     : '-';
 
-                // Full OCR text tooltip
-                const ocrTooltip = ad.ocrExtractedText
-                    ? `title="${escapeHtml(ad.ocrExtractedText.substring(0, 500))}"`
+                // Full extracted text tooltip
+                const textTooltip = ad.extractedText
+                    ? `title="${escapeHtml(ad.extractedText.substring(0, 500))}"`
                     : '';
 
                 row.innerHTML = `
@@ -203,7 +203,7 @@
                         <strong>${escapeHtml(advertiserName)}</strong>
                         <div class="sub-info">${escapeHtml(ad.advertiserId || '')}</div>
                     </td>
-                    <td class="text-cell" ${ocrTooltip}>${ocrBadge}${escapeHtml(titleHeadline)}</td>
+                    <td class="text-cell" ${textTooltip}>${visionBadge}${escapeHtml(titleHeadline)}</td>
                     <td class="text-cell">${escapeHtml(descSnippet)}</td>
                     <td class="url-cell">${visibleLinkHtml}</td>
                     <td><span class="badge badge-${(ad.format || 'unknown').toLowerCase()}">${ad.format || 'Unknown'}</span></td>
@@ -236,8 +236,8 @@
                     'Call To Action',
                     'Visible Link',
                     'Destination URL',
-                    'OCR Extracted Text',
-                    'OCR Processed',
+                    'AI Extracted Text',
+                    'AI Processed',
                     'Format',
                     'Image URL',
                     'Video URL',
@@ -262,8 +262,8 @@
                     ad.callToAction || '',
                     ad.visibleLink || ad.displayUrl || '',
                     ad.destinationUrl || '',
-                    ad.ocrExtractedText || '',
-                    ad.ocrProcessed ? 'Yes' : 'No',
+                    ad.extractedText || '',
+                    ad.visionProcessed ? 'Yes' : 'No',
                     ad.format || '',
                     ad.image || ad.imageUrl || '',
                     ad.videoUrl || '',
@@ -406,12 +406,12 @@
         .badge-image { background: #fff3e0; color: #e65100; }
         .badge-unknown { background: #f5f5f5; color: #666; }
 
-        .ocr-badge {
+        .vision-badge {
             display: inline-block;
-            padding: 2px 4px;
+            padding: 2px 5px;
             font-size: 9px;
-            background: #e8f5e9;
-            color: #2e7d32;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
             border-radius: 3px;
             margin-right: 4px;
             font-weight: 600;

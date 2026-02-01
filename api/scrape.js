@@ -1,31 +1,60 @@
 const axios = require('axios');
 
-// OCR.space API for extracting text from ad images
-async function extractTextFromImage(imageUrl) {
-  const ocrApiKey = process.env.OCR_SPACE_API_KEY;
-  if (!ocrApiKey) return null;
+// Use Claude's vision to extract text and understand ad content
+async function extractTextWithClaude(imageUrl) {
+  const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+  if (!anthropicApiKey) return null;
 
   try {
-    const response = await axios.post('https://api.ocr.space/parse/image', null, {
-      params: {
-        apikey: ocrApiKey,
-        url: imageUrl,
-        language: 'eng',
-        isOverlayRequired: false,
-        detectOrientation: true,
-        scale: true,
-        OCREngine: 2 // More accurate engine
+    const response = await axios.post('https://api.anthropic.com/v1/messages', {
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1024,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: {
+              type: 'url',
+              url: imageUrl
+            }
+          },
+          {
+            type: 'text',
+            text: `Analyze this Google ad image and extract the following information in JSON format:
+{
+  "headline": "main headline/title text",
+  "description": "body text or description",
+  "callToAction": "button text like 'Shop Now', 'Learn More'",
+  "visibleUrl": "displayed URL like 'www.example.com'",
+  "brandName": "brand or company name if visible",
+  "allText": "all text in the ad combined"
+}
+
+Only include fields that are clearly visible. Use empty string "" for fields not found. Return ONLY valid JSON, no other text.`
+          }
+        ]
+      }]
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': anthropicApiKey,
+        'anthropic-version': '2023-06-01'
       },
-      timeout: 15000
+      timeout: 30000
     });
 
-    if (response.data && response.data.ParsedResults && response.data.ParsedResults.length > 0) {
-      const parsedText = response.data.ParsedResults[0].ParsedText;
-      return parsedText ? parsedText.trim() : null;
+    if (response.data?.content?.[0]?.text) {
+      const text = response.data.content[0].text.trim();
+      // Extract JSON from response
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        return JSON.parse(jsonMatch[0]);
+      }
     }
     return null;
   } catch (error) {
-    console.error('OCR error:', error.message);
+    console.error('Claude vision error:', error.response?.data || error.message);
     return null;
   }
 }
@@ -74,9 +103,9 @@ module.exports = async function handler(req, res) {
     const searchParams = parseTransparencyUrl(url);
     const ads = await fetchAdsFromSerpApi(searchParams, apiKey, fetchDetails, detailsLimit);
 
-    // Extract text from images using OCR
-    const ocrApiKey = process.env.OCR_SPACE_API_KEY;
-    if (enableOcr && ocrApiKey && ads.length > 0) {
+    // Extract text from images using Claude's vision
+    const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+    if (enableOcr && anthropicApiKey && ads.length > 0) {
       await extractTextFromAds(ads.slice(0, ocrLimit));
     }
 
@@ -86,8 +115,8 @@ module.exports = async function handler(req, res) {
       url: url,
       fetchedDetails: fetchDetails,
       detailsLimit: detailsLimit,
-      ocrEnabled: enableOcr && !!ocrApiKey,
-      ocrLimit: ocrLimit,
+      visionEnabled: enableOcr && !!anthropicApiKey,
+      visionLimit: ocrLimit,
       ads: ads
     });
 
@@ -405,9 +434,9 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Extract text from ad images using OCR
+// Extract text from ad images using Claude's vision
 async function extractTextFromAds(ads) {
-  const batchSize = 5; // Process 5 ads at a time
+  const batchSize = 3; // Process 3 ads at a time (Claude rate limits)
 
   for (let i = 0; i < ads.length; i += batchSize) {
     const batch = ads.slice(i, i + batchSize);
@@ -417,53 +446,39 @@ async function extractTextFromAds(ads) {
         const imageUrl = ad.image || ad.imageUrl;
         if (!imageUrl) return;
 
-        const extractedText = await extractTextFromImage(imageUrl);
+        const extracted = await extractTextWithClaude(imageUrl);
 
-        if (extractedText) {
-          ad.ocrExtractedText = extractedText;
-
-          // Try to parse common ad elements from extracted text
-          const lines = extractedText.split('\n').map(l => l.trim()).filter(Boolean);
-
-          if (lines.length > 0) {
-            // First line is usually the headline/title
-            if (!ad.headline && lines[0]) {
-              ad.headline = lines[0];
-            }
-
-            // Look for URL patterns
-            const urlPattern = /(?:www\.)?[\w-]+\.[a-z]{2,}(?:\/\S*)?/gi;
-            const foundUrls = extractedText.match(urlPattern);
-            if (foundUrls && foundUrls.length > 0 && !ad.visibleLink) {
-              ad.visibleLink = foundUrls[0];
-            }
-
-            // Middle lines are usually description
-            if (lines.length > 2 && !ad.description) {
-              ad.description = lines.slice(1, -1).join(' ').substring(0, 200);
-            } else if (lines.length === 2 && !ad.description) {
-              ad.description = lines[1];
-            }
-
-            // Last line might be CTA or URL
-            if (lines.length > 1) {
-              const lastLine = lines[lines.length - 1];
-              if (lastLine.match(/^(shop|buy|learn|get|try|sign|start|download|order)/i) && !ad.callToAction) {
-                ad.callToAction = lastLine;
-              }
-            }
+        if (extracted) {
+          // Apply Claude's extracted data
+          if (extracted.headline && !ad.headline) {
+            ad.headline = extracted.headline;
+          }
+          if (extracted.description && !ad.description) {
+            ad.description = extracted.description;
+          }
+          if (extracted.callToAction && !ad.callToAction) {
+            ad.callToAction = extracted.callToAction;
+          }
+          if (extracted.visibleUrl && !ad.visibleLink) {
+            ad.visibleLink = extracted.visibleUrl;
+          }
+          if (extracted.brandName) {
+            ad.brandName = extracted.brandName;
+          }
+          if (extracted.allText) {
+            ad.extractedText = extracted.allText;
           }
 
-          ad.ocrProcessed = true;
+          ad.visionProcessed = true;
         }
       } catch (error) {
-        console.error(`OCR failed for ad ${ad.id}: ${error.message}`);
+        console.error(`Vision extraction failed for ad ${ad.id}: ${error.message}`);
       }
     }));
 
-    // Delay between batches to avoid rate limiting
+    // Delay between batches to respect rate limits
     if (i + batchSize < ads.length) {
-      await delay(500);
+      await delay(1000);
     }
   }
 }
