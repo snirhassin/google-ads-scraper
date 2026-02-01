@@ -20,6 +20,10 @@ module.exports = async function handler(req, res) {
     ? req.query.url
     : req.body?.url;
 
+  // Option to fetch details (default: true, limit to first 100 for performance)
+  const fetchDetails = req.body?.fetchDetails !== false;
+  const detailsLimit = req.body?.detailsLimit || 100;
+
   if (!url || !url.includes('adstransparency.google.com')) {
     return res.status(400).json({
       error: 'Invalid or missing Google Ads Transparency URL',
@@ -34,12 +38,14 @@ module.exports = async function handler(req, res) {
 
   try {
     const searchParams = parseTransparencyUrl(url);
-    const ads = await fetchAdsFromSerpApi(searchParams, apiKey);
+    const ads = await fetchAdsFromSerpApi(searchParams, apiKey, fetchDetails, detailsLimit);
 
     return res.status(200).json({
       success: true,
       total: ads.length,
       url: url,
+      fetchedDetails: fetchDetails,
+      detailsLimit: detailsLimit,
       ads: ads
     });
 
@@ -98,7 +104,7 @@ function mapRegion(region) {
   return regionMap[region?.toUpperCase()] || region;
 }
 
-async function fetchAdsFromSerpApi(searchParams, apiKey) {
+async function fetchAdsFromSerpApi(searchParams, apiKey, fetchDetails, detailsLimit) {
   const scrapedAds = [];
   let nextPageToken = null;
   let pageNum = 1;
@@ -139,12 +145,90 @@ async function fetchAdsFromSerpApi(searchParams, apiKey) {
 
     // Small delay between requests
     if (nextPageToken && pageNum <= maxPages) {
-      await delay(500);
+      await delay(300);
     }
 
   } while (nextPageToken && pageNum <= maxPages);
 
+  // Fetch details for ads (in parallel batches)
+  if (fetchDetails && scrapedAds.length > 0) {
+    const adsToFetchDetails = scrapedAds.slice(0, detailsLimit);
+    await fetchAdDetails(adsToFetchDetails, apiKey);
+  }
+
   return scrapedAds;
+}
+
+async function fetchAdDetails(ads, apiKey) {
+  // Process in parallel batches of 10
+  const batchSize = 10;
+
+  for (let i = 0; i < ads.length; i += batchSize) {
+    const batch = ads.slice(i, i + batchSize);
+
+    await Promise.all(batch.map(async (ad) => {
+      try {
+        if (!ad.rawData?.serpapi_details_link) return;
+
+        // Use the serpapi_details_link directly (it's already a full URL with API key placeholder)
+        const detailsUrl = ad.rawData.serpapi_details_link.replace('{api_key}', apiKey);
+
+        const response = await axios.get(detailsUrl, { timeout: 10000 });
+        const details = response.data;
+
+        if (details.error) return;
+
+        // Extract ad content from details
+        const adDetails = details.ad_creative || {};
+
+        // Update ad with detailed information
+        ad.headline = adDetails.headline || adDetails.title || ad.headline || '';
+        ad.text = adDetails.text || adDetails.body_text || ad.text || '';
+        ad.description = adDetails.description || adDetails.body || ad.description || '';
+        ad.callToAction = adDetails.call_to_action || adDetails.cta || ad.callToAction || '';
+
+        // URLs from details
+        ad.destinationUrl = adDetails.destination_url || adDetails.landing_page_url || adDetails.final_url || ad.destinationUrl || '';
+        ad.displayUrl = adDetails.display_url || adDetails.visible_url || ad.displayUrl || '';
+
+        // Additional fields from details
+        ad.businessName = adDetails.business_name || '';
+        ad.advertiserWebsite = adDetails.advertiser_website || '';
+
+        // Media from details
+        if (adDetails.images && adDetails.images.length > 0) {
+          ad.images = adDetails.images;
+          ad.image = ad.image || adDetails.images[0];
+        }
+        if (adDetails.videos && adDetails.videos.length > 0) {
+          ad.videos = adDetails.videos;
+          ad.videoUrl = ad.videoUrl || adDetails.videos[0]?.url;
+        }
+
+        // Ad variations
+        if (adDetails.variations) {
+          ad.variations = adDetails.variations;
+        }
+
+        // Regions shown
+        if (adDetails.regions_shown) {
+          ad.regionsShown = adDetails.regions_shown;
+        }
+
+        // Store raw details
+        ad.rawDetails = adDetails;
+
+      } catch (error) {
+        // Silently fail for individual ad details
+        console.error(`Failed to fetch details for ad ${ad.id}: ${error.message}`);
+      }
+    }));
+
+    // Small delay between batches
+    if (i + batchSize < ads.length) {
+      await delay(200);
+    }
+  }
 }
 
 function transformAdCreative(creative) {
@@ -166,13 +250,13 @@ function transformAdCreative(creative) {
     advertiserLocation: creative.advertiser_location || '',
     advertiserVerified: creative.advertiser_verified || false,
 
-    // Ad content - TEXT & DESCRIPTIONS
+    // Ad content - will be populated from details API
     headline: creative.headline || creative.title || '',
     text: creative.text || '',
     description: creative.description || '',
     callToAction: creative.call_to_action || '',
 
-    // URLs
+    // URLs - will be populated from details API
     destinationUrl: creative.destination_url || creative.landing_page || '',
     displayUrl: creative.display_url || '',
     detailsLink: creative.details_link || '',
@@ -190,12 +274,17 @@ function transformAdCreative(creative) {
     lastShown: lastShown,
     firstShownTimestamp: creative.first_shown,
     lastShownTimestamp: creative.last_shown,
+    totalDaysShown: creative.total_days_shown || null,
 
     // Targeting
     regions: creative.regions || [],
     targetedRegions: creative.targeted_regions || [],
 
-    // Raw data for anything we might have missed
+    // Dimensions
+    width: creative.width || null,
+    height: creative.height || null,
+
+    // Raw data for reference
     rawData: creative
   };
 }
