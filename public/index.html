@@ -172,11 +172,14 @@
                 // Advertiser (use adFundedBy if available)
                 const advertiserName = ad.adFundedBy || ad.advertiser || 'Unknown';
 
-                // Title/Headline
+                // Title/Headline (check OCR extracted first)
                 const titleHeadline = ad.title || ad.headline || '-';
 
                 // Description/Snippet
                 const descSnippet = ad.description || ad.text || '-';
+
+                // Show OCR badge if text was extracted via OCR
+                const ocrBadge = ad.ocrProcessed ? '<span class="ocr-badge">OCR</span>' : '';
 
                 // Visible link / destination URL
                 const visibleLink = ad.visibleLink || ad.displayUrl || ad.destinationUrl || '';
@@ -189,13 +192,18 @@
                     ? `<a href="${ad.detailsLink}" target="_blank" rel="noopener" class="btn btn-small">View</a>`
                     : '-';
 
+                // Full OCR text tooltip
+                const ocrTooltip = ad.ocrExtractedText
+                    ? `title="${escapeHtml(ad.ocrExtractedText.substring(0, 500))}"`
+                    : '';
+
                 row.innerHTML = `
                     <td>${imageHtml}</td>
                     <td>
                         <strong>${escapeHtml(advertiserName)}</strong>
                         <div class="sub-info">${escapeHtml(ad.advertiserId || '')}</div>
                     </td>
-                    <td class="text-cell">${escapeHtml(titleHeadline)}</td>
+                    <td class="text-cell" ${ocrTooltip}>${ocrBadge}${escapeHtml(titleHeadline)}</td>
                     <td class="text-cell">${escapeHtml(descSnippet)}</td>
                     <td class="url-cell">${visibleLinkHtml}</td>
                     <td><span class="badge badge-${(ad.format || 'unknown').toLowerCase()}">${ad.format || 'Unknown'}</span></td>
@@ -215,7 +223,7 @@
                 return;
             }
 
-            // Comprehensive Excel export with ALL fields
+            // Comprehensive Excel export with ALL fields including OCR
             const wsData = [
                 [
                     'Advertiser',
@@ -228,15 +236,15 @@
                     'Call To Action',
                     'Visible Link',
                     'Destination URL',
+                    'OCR Extracted Text',
+                    'OCR Processed',
                     'Format',
                     'Image URL',
                     'Video URL',
-                    'Video Duration',
                     'Region',
                     'First Shown',
                     'Last Shown',
                     'Days Shown',
-                    'Sitelinks',
                     'Details Link',
                     'Scraped At'
                 ]
@@ -254,15 +262,15 @@
                     ad.callToAction || '',
                     ad.visibleLink || ad.displayUrl || '',
                     ad.destinationUrl || '',
+                    ad.ocrExtractedText || '',
+                    ad.ocrProcessed ? 'Yes' : 'No',
                     ad.format || '',
                     ad.image || ad.imageUrl || '',
                     ad.videoUrl || '',
-                    ad.videoDuration || '',
                     ad.regionName || '',
                     ad.firstShown || '',
                     ad.lastShown || '',
                     ad.totalDaysShown || '',
-                    Array.isArray(ad.sitelinkTexts) ? ad.sitelinkTexts.join(' | ') : '',
                     ad.detailsLink || '',
                     new Date().toLocaleString()
                 ]);
@@ -282,15 +290,15 @@
                 { wch: 15 }, // CTA
                 { wch: 35 }, // Visible Link
                 { wch: 50 }, // Destination URL
+                { wch: 80 }, // OCR Extracted Text
+                { wch: 12 }, // OCR Processed
                 { wch: 10 }, // Format
                 { wch: 60 }, // Image URL
                 { wch: 60 }, // Video URL
-                { wch: 12 }, // Video Duration
                 { wch: 15 }, // Region
                 { wch: 12 }, // First Shown
                 { wch: 12 }, // Last Shown
                 { wch: 10 }, // Days Shown
-                { wch: 50 }, // Sitelinks
                 { wch: 60 }, // Details Link
                 { wch: 20 }, // Scraped At
             ];
@@ -397,6 +405,18 @@
         .badge-video { background: #e8f5e9; color: #388e3c; }
         .badge-image { background: #fff3e0; color: #e65100; }
         .badge-unknown { background: #f5f5f5; color: #666; }
+
+        .ocr-badge {
+            display: inline-block;
+            padding: 2px 4px;
+            font-size: 9px;
+            background: #e8f5e9;
+            color: #2e7d32;
+            border-radius: 3px;
+            margin-right: 4px;
+            font-weight: 600;
+            vertical-align: middle;
+        }
 
         .ad-thumbnail {
             width: 60px;

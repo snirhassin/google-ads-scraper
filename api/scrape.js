@@ -1,5 +1,35 @@
 const axios = require('axios');
 
+// OCR.space API for extracting text from ad images
+async function extractTextFromImage(imageUrl) {
+  const ocrApiKey = process.env.OCR_SPACE_API_KEY;
+  if (!ocrApiKey) return null;
+
+  try {
+    const response = await axios.post('https://api.ocr.space/parse/image', null, {
+      params: {
+        apikey: ocrApiKey,
+        url: imageUrl,
+        language: 'eng',
+        isOverlayRequired: false,
+        detectOrientation: true,
+        scale: true,
+        OCREngine: 2 // More accurate engine
+      },
+      timeout: 15000
+    });
+
+    if (response.data && response.data.ParsedResults && response.data.ParsedResults.length > 0) {
+      const parsedText = response.data.ParsedResults[0].ParsedText;
+      return parsedText ? parsedText.trim() : null;
+    }
+    return null;
+  } catch (error) {
+    console.error('OCR error:', error.message);
+    return null;
+  }
+}
+
 // Vercel Serverless Function for Google Ads Transparency scraping
 module.exports = async function handler(req, res) {
   // Enable CORS
@@ -24,6 +54,10 @@ module.exports = async function handler(req, res) {
   const fetchDetails = req.body?.fetchDetails !== false;
   const detailsLimit = req.body?.detailsLimit || 100;
 
+  // Option to enable OCR text extraction from images (default: true if API key exists)
+  const enableOcr = req.body?.enableOcr !== false;
+  const ocrLimit = req.body?.ocrLimit || 50; // Limit OCR to first N ads for performance
+
   if (!url || !url.includes('adstransparency.google.com')) {
     return res.status(400).json({
       error: 'Invalid or missing Google Ads Transparency URL',
@@ -40,12 +74,20 @@ module.exports = async function handler(req, res) {
     const searchParams = parseTransparencyUrl(url);
     const ads = await fetchAdsFromSerpApi(searchParams, apiKey, fetchDetails, detailsLimit);
 
+    // Extract text from images using OCR
+    const ocrApiKey = process.env.OCR_SPACE_API_KEY;
+    if (enableOcr && ocrApiKey && ads.length > 0) {
+      await extractTextFromAds(ads.slice(0, ocrLimit));
+    }
+
     return res.status(200).json({
       success: true,
       total: ads.length,
       url: url,
       fetchedDetails: fetchDetails,
       detailsLimit: detailsLimit,
+      ocrEnabled: enableOcr && !!ocrApiKey,
+      ocrLimit: ocrLimit,
       ads: ads
     });
 
@@ -361,4 +403,67 @@ function isValidAd(ad) {
 
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Extract text from ad images using OCR
+async function extractTextFromAds(ads) {
+  const batchSize = 5; // Process 5 ads at a time
+
+  for (let i = 0; i < ads.length; i += batchSize) {
+    const batch = ads.slice(i, i + batchSize);
+
+    await Promise.all(batch.map(async (ad) => {
+      try {
+        const imageUrl = ad.image || ad.imageUrl;
+        if (!imageUrl) return;
+
+        const extractedText = await extractTextFromImage(imageUrl);
+
+        if (extractedText) {
+          ad.ocrExtractedText = extractedText;
+
+          // Try to parse common ad elements from extracted text
+          const lines = extractedText.split('\n').map(l => l.trim()).filter(Boolean);
+
+          if (lines.length > 0) {
+            // First line is usually the headline/title
+            if (!ad.headline && lines[0]) {
+              ad.headline = lines[0];
+            }
+
+            // Look for URL patterns
+            const urlPattern = /(?:www\.)?[\w-]+\.[a-z]{2,}(?:\/\S*)?/gi;
+            const foundUrls = extractedText.match(urlPattern);
+            if (foundUrls && foundUrls.length > 0 && !ad.visibleLink) {
+              ad.visibleLink = foundUrls[0];
+            }
+
+            // Middle lines are usually description
+            if (lines.length > 2 && !ad.description) {
+              ad.description = lines.slice(1, -1).join(' ').substring(0, 200);
+            } else if (lines.length === 2 && !ad.description) {
+              ad.description = lines[1];
+            }
+
+            // Last line might be CTA or URL
+            if (lines.length > 1) {
+              const lastLine = lines[lines.length - 1];
+              if (lastLine.match(/^(shop|buy|learn|get|try|sign|start|download|order)/i) && !ad.callToAction) {
+                ad.callToAction = lastLine;
+              }
+            }
+          }
+
+          ad.ocrProcessed = true;
+        }
+      } catch (error) {
+        console.error(`OCR failed for ad ${ad.id}: ${error.message}`);
+      }
+    }));
+
+    // Delay between batches to avoid rate limiting
+    if (i + batchSize < ads.length) {
+      await delay(500);
+    }
+  }
 }
