@@ -170,8 +170,9 @@ async function fetchAdDetails(ads, apiKey) {
       try {
         if (!ad.rawData?.serpapi_details_link) return;
 
-        // Use the serpapi_details_link directly (it's already a full URL with API key placeholder)
-        const detailsUrl = ad.rawData.serpapi_details_link.replace('{api_key}', apiKey);
+        // Append API key to the serpapi_details_link
+        const baseUrl = ad.rawData.serpapi_details_link;
+        const detailsUrl = baseUrl + (baseUrl.includes('?') ? '&' : '?') + `api_key=${apiKey}`;
 
         const response = await axios.get(detailsUrl, { timeout: 10000 });
         const details = response.data;
