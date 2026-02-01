@@ -60,9 +60,9 @@
                             <tr>
                                 <th>Image</th>
                                 <th>Advertiser</th>
-                                <th>Ad Text / Headline</th>
-                                <th>Description</th>
-                                <th>Destination URL</th>
+                                <th>Title / Headline</th>
+                                <th>Description / Snippet</th>
+                                <th>Visible Link</th>
                                 <th>Format</th>
                                 <th>Date Range</th>
                                 <th>Details</th>
@@ -169,16 +169,19 @@
                     ? `<img src="${ad.image || ad.imageUrl}" alt="Ad" class="ad-thumbnail" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2260%22 height=%2260%22><rect fill=%22%23f0f0f0%22 width=%2260%22 height=%2260%22/><text x=%2230%22 y=%2235%22 text-anchor=%22middle%22 fill=%22%23999%22 font-size=%2210%22>No img</text></svg>'">`
                     : '<span class="no-image">-</span>';
 
-                // Ad text (headline or text)
-                const adText = ad.headline || ad.text || '-';
+                // Advertiser (use adFundedBy if available)
+                const advertiserName = ad.adFundedBy || ad.advertiser || 'Unknown';
 
-                // Description
-                const description = ad.description || '-';
+                // Title/Headline
+                const titleHeadline = ad.title || ad.headline || '-';
 
-                // Destination URL
-                const destUrl = ad.destinationUrl || ad.displayUrl || '-';
-                const destUrlHtml = destUrl !== '-'
-                    ? `<a href="${destUrl}" target="_blank" rel="noopener" class="dest-url">${truncateUrl(destUrl, 40)}</a>`
+                // Description/Snippet
+                const descSnippet = ad.description || ad.text || '-';
+
+                // Visible link / destination URL
+                const visibleLink = ad.visibleLink || ad.displayUrl || ad.destinationUrl || '';
+                const visibleLinkHtml = visibleLink
+                    ? `<a href="${ad.destinationUrl || visibleLink}" target="_blank" rel="noopener" class="visible-link">${escapeHtml(truncateUrl(visibleLink, 35))}</a>`
                     : '-';
 
                 // Details link
@@ -189,12 +192,12 @@
                 row.innerHTML = `
                     <td>${imageHtml}</td>
                     <td>
-                        <strong>${escapeHtml(ad.advertiser)}</strong>
+                        <strong>${escapeHtml(advertiserName)}</strong>
                         <div class="sub-info">${escapeHtml(ad.advertiserId || '')}</div>
                     </td>
-                    <td class="text-cell">${escapeHtml(adText)}</td>
-                    <td class="text-cell">${escapeHtml(description)}</td>
-                    <td class="url-cell">${destUrlHtml}</td>
+                    <td class="text-cell">${escapeHtml(titleHeadline)}</td>
+                    <td class="text-cell">${escapeHtml(descSnippet)}</td>
+                    <td class="url-cell">${visibleLinkHtml}</td>
                     <td><span class="badge badge-${(ad.format || 'unknown').toLowerCase()}">${ad.format || 'Unknown'}</span></td>
                     <td class="date-cell">${ad.dateRange || '-'}</td>
                     <td>${detailsHtml}</td>
@@ -216,24 +219,25 @@
             const wsData = [
                 [
                     'Advertiser',
+                    'Ad Funded By',
                     'Advertiser ID',
-                    'Advertiser Location',
-                    'Advertiser Verified',
                     'Creative ID',
+                    'Title',
                     'Headline',
-                    'Ad Text',
-                    'Description',
+                    'Description/Snippet',
                     'Call To Action',
+                    'Visible Link',
                     'Destination URL',
-                    'Display URL',
-                    'Details Link',
+                    'Format',
                     'Image URL',
                     'Video URL',
-                    'Format',
-                    'Ad Type',
+                    'Video Duration',
+                    'Region',
                     'First Shown',
                     'Last Shown',
-                    'Regions',
+                    'Days Shown',
+                    'Sitelinks',
+                    'Details Link',
                     'Scraped At'
                 ]
             ];
@@ -241,24 +245,25 @@
             scrapedAds.forEach(ad => {
                 wsData.push([
                     ad.advertiser || '',
+                    ad.adFundedBy || '',
                     ad.advertiserId || '',
-                    ad.advertiserLocation || '',
-                    ad.advertiserVerified ? 'Yes' : 'No',
                     ad.creativeId || '',
+                    ad.title || '',
                     ad.headline || '',
-                    ad.text || '',
-                    ad.description || '',
+                    ad.description || ad.text || '',
                     ad.callToAction || '',
+                    ad.visibleLink || ad.displayUrl || '',
                     ad.destinationUrl || '',
-                    ad.displayUrl || '',
-                    ad.detailsLink || '',
+                    ad.format || '',
                     ad.image || ad.imageUrl || '',
                     ad.videoUrl || '',
-                    ad.format || '',
-                    ad.adType || '',
+                    ad.videoDuration || '',
+                    ad.regionName || '',
                     ad.firstShown || '',
                     ad.lastShown || '',
-                    Array.isArray(ad.regions) ? ad.regions.join(', ') : (ad.regions || ''),
+                    ad.totalDaysShown || '',
+                    Array.isArray(ad.sitelinkTexts) ? ad.sitelinkTexts.join(' | ') : '',
+                    ad.detailsLink || '',
                     new Date().toLocaleString()
                 ]);
             });
@@ -268,24 +273,25 @@
             // Set column widths
             ws['!cols'] = [
                 { wch: 25 }, // Advertiser
+                { wch: 25 }, // Ad Funded By
                 { wch: 25 }, // Advertiser ID
-                { wch: 15 }, // Location
-                { wch: 10 }, // Verified
                 { wch: 25 }, // Creative ID
-                { wch: 40 }, // Headline
-                { wch: 50 }, // Ad Text
-                { wch: 50 }, // Description
+                { wch: 40 }, // Title
+                { wch: 50 }, // Headline
+                { wch: 60 }, // Description/Snippet
                 { wch: 15 }, // CTA
+                { wch: 35 }, // Visible Link
                 { wch: 50 }, // Destination URL
-                { wch: 30 }, // Display URL
-                { wch: 60 }, // Details Link
+                { wch: 10 }, // Format
                 { wch: 60 }, // Image URL
                 { wch: 60 }, // Video URL
-                { wch: 10 }, // Format
-                { wch: 10 }, // Ad Type
+                { wch: 12 }, // Video Duration
+                { wch: 15 }, // Region
                 { wch: 12 }, // First Shown
                 { wch: 12 }, // Last Shown
-                { wch: 20 }, // Regions
+                { wch: 10 }, // Days Shown
+                { wch: 50 }, // Sitelinks
+                { wch: 60 }, // Details Link
                 { wch: 20 }, // Scraped At
             ];
 
@@ -429,10 +435,15 @@
             max-width: 150px;
         }
 
-        .dest-url {
+        .dest-url, .visible-link {
             font-size: 12px;
             color: #1976d2;
             word-break: break-all;
+            text-decoration: none;
+        }
+
+        .visible-link:hover {
+            text-decoration: underline;
         }
 
         .date-cell {

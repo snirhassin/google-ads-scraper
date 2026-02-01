@@ -179,48 +179,91 @@ async function fetchAdDetails(ads, apiKey) {
 
         if (details.error) return;
 
-        // Store full response for debugging
-        ad.detailsApiResponse = details;
+        // Extract data from details API response
+        const searchInfo = details.search_information || {};
+        const adCreatives = details.ad_creatives || [];
 
-        // The details might be in different places depending on the response
-        const adDetails = details.ad_creative || details.creative || details || {};
+        // Advertiser info from details
+        ad.adFundedBy = searchInfo.ad_funded_by || ad.advertiser || '';
 
-        // Update ad with detailed information
-        ad.headline = adDetails.headline || adDetails.title || ad.headline || '';
-        ad.text = adDetails.text || adDetails.body_text || ad.text || '';
-        ad.description = adDetails.description || adDetails.body || ad.description || '';
-        ad.callToAction = adDetails.call_to_action || adDetails.cta || ad.callToAction || '';
+        // Format from details
+        ad.format = mapFormat(searchInfo.format) || ad.format || '';
 
-        // URLs from details
-        ad.destinationUrl = adDetails.destination_url || adDetails.landing_page_url || adDetails.final_url || ad.destinationUrl || '';
-        ad.displayUrl = adDetails.display_url || adDetails.visible_url || ad.displayUrl || '';
-
-        // Additional fields from details
-        ad.businessName = adDetails.business_name || '';
-        ad.advertiserWebsite = adDetails.advertiser_website || '';
-
-        // Media from details
-        if (adDetails.images && adDetails.images.length > 0) {
-          ad.images = adDetails.images;
-          ad.image = ad.image || adDetails.images[0];
+        // Regions from details
+        if (searchInfo.regions && searchInfo.regions.length > 0) {
+          ad.regionsShown = searchInfo.regions.map(r => ({
+            region: r.region,
+            regionName: r.region_name,
+            lastShown: r.last_shown
+          }));
         }
-        if (adDetails.videos && adDetails.videos.length > 0) {
-          ad.videos = adDetails.videos;
-          ad.videoUrl = ad.videoUrl || adDetails.videos[0]?.url;
+        ad.regionName = searchInfo.region_name || '';
+
+        // More ads link
+        ad.moreAdsByAdvertiserLink = searchInfo.more_ads_by_advertiser || '';
+
+        // Extract ad content from ad_creatives array
+        if (adCreatives.length > 0) {
+          const creative = adCreatives[0]; // Primary creative
+
+          // Text content - title, headline, snippet
+          ad.title = creative.title || ad.title || '';
+          ad.headline = creative.headline || creative.long_headline || ad.headline || '';
+          ad.text = creative.snippet || creative.description || ad.text || '';
+          ad.description = creative.snippet || creative.long_headline || ad.description || '';
+          ad.callToAction = creative.call_to_action || ad.callToAction || '';
+
+          // URLs - visible_link and destination link
+          ad.visibleLink = creative.visible_link || '';
+          ad.destinationUrl = creative.link || creative.destination_url || ad.destinationUrl || '';
+          ad.displayUrl = creative.visible_link || ad.displayUrl || '';
+
+          // Images
+          ad.images = adCreatives.map(c => c.image).filter(Boolean);
+          if (!ad.image && ad.images.length > 0) {
+            ad.image = ad.images[0];
+          }
+          ad.advertiserLogo = creative.advertiser_logo || '';
+
+          // Video content
+          if (creative.video_link || creative.raw_video_link) {
+            ad.videoUrl = creative.video_link || creative.raw_video_link || '';
+            ad.videoDuration = creative.video_duration || '';
+            ad.videoThumbnail = creative.thumbnail || '';
+            ad.channelName = creative.channel_name || '';
+          }
+
+          // Sitelinks
+          if (creative.sitelink_texts && creative.sitelink_texts.length > 0) {
+            ad.sitelinkTexts = creative.sitelink_texts;
+            ad.sitelinkDescriptions = creative.sitelink_descriptions || [];
+          }
+
+          // Carousel data
+          if (creative.carousel_data && creative.carousel_data.length > 0) {
+            ad.carouselData = creative.carousel_data;
+          }
+
+          // Extensions
+          if (creative.extensions && creative.extensions.length > 0) {
+            ad.extensions = creative.extensions;
+          }
+
+          // Additional metadata
+          ad.advertiserVerified = creative.is_verified || ad.advertiserVerified || false;
+          if (creative.rating) {
+            ad.rating = creative.rating;
+            ad.reviews = creative.reviews;
+          }
+
+          // Store all creatives if there are multiple
+          if (adCreatives.length > 1) {
+            ad.allCreatives = adCreatives;
+          }
         }
 
-        // Ad variations
-        if (adDetails.variations) {
-          ad.variations = adDetails.variations;
-        }
-
-        // Regions shown
-        if (adDetails.regions_shown) {
-          ad.regionsShown = adDetails.regions_shown;
-        }
-
-        // Store raw details
-        ad.rawDetails = adDetails;
+        // Flag that details were fetched
+        ad.detailsFetched = true;
 
       } catch (error) {
         // Silently fail for individual ad details
