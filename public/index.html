@@ -10,43 +10,44 @@
     <div class="container">
         <header>
             <h1>Google Ads Transparency Scraper</h1>
-            <p>Extract ad data from Google Ads Transparency pages</p>
+            <p>Extract ad data from Google Ads Transparency pages using SerpAPI</p>
         </header>
 
         <main>
             <section class="input-section">
                 <div class="url-input-group">
                     <label for="transparency-url">Enter Google Ads Transparency URL:</label>
-                    <input 
-                        type="url" 
-                        id="transparency-url" 
+                    <input
+                        type="url"
+                        id="transparency-url"
                         placeholder="https://adstransparency.google.com/?region=anywhere&domain=example.com"
                         required
                     >
                     <div class="button-group">
                         <button id="start-btn" class="btn btn-primary">Start Scraping</button>
-                        <button id="stop-btn" class="btn btn-danger" disabled>Stop</button>
-                        <button id="resume-btn" class="btn btn-warning" disabled>Resume</button>
                     </div>
+                </div>
+                <div class="example-urls">
+                    <p><strong>Example URLs:</strong></p>
+                    <code>https://adstransparency.google.com/?region=anywhere&domain=amazon.com</code>
                 </div>
             </section>
 
-            <section class="progress-section" style="display: none;">
+            <section class="progress-section" id="progress-section" style="display: none;">
                 <div class="progress-info">
-                    <h3>Scraping Progress</h3>
+                    <h3>Scraping in Progress</h3>
                     <div class="progress-bar">
-                        <div class="progress-fill" id="progress-fill"></div>
+                        <div class="progress-fill" id="progress-fill" style="width: 100%; animation: pulse 1.5s infinite;"></div>
                     </div>
                     <div class="progress-stats">
-                        <span id="ads-scraped">0</span> ads scraped | 
-                        <span id="current-status">Initializing...</span>
+                        <span id="current-status">Fetching ads from SerpAPI...</span>
                     </div>
                 </div>
             </section>
 
-            <section class="results-section" style="display: none;">
+            <section class="results-section" id="results-section" style="display: none;">
                 <div class="results-header">
-                    <h3>Scraped Ads Data</h3>
+                    <h3>Scraped Ads Data (<span id="total-count">0</span> ads)</h3>
                     <div class="results-actions">
                         <button id="export-excel-btn" class="btn btn-success">Export to Excel</button>
                         <button id="clear-results-btn" class="btn btn-secondary">Clear Results</button>
@@ -56,11 +57,11 @@
                     <table id="results-table">
                         <thead>
                             <tr>
-                                <th>Ad Title</th>
-                                <th>Description</th>
-                                <th>URL</th>
-                                <th>Images</th>
+                                <th>Advertiser</th>
+                                <th>Advertiser ID</th>
+                                <th>Creative ID</th>
                                 <th>Format</th>
+                                <th>Image</th>
                                 <th>Date Range</th>
                             </tr>
                         </thead>
@@ -69,16 +70,214 @@
                     </table>
                 </div>
             </section>
+
+            <section class="error-section" id="error-section" style="display: none;">
+                <div class="error-message">
+                    <h3>Error</h3>
+                    <p id="error-text"></p>
+                    <button id="retry-btn" class="btn btn-primary">Try Again</button>
+                </div>
+            </section>
         </main>
     </div>
 
-    <div id="loading-overlay" class="loading-overlay" style="display: none;">
-        <div class="loading-spinner"></div>
-        <p>Initializing scraper...</p>
-    </div>
-
-    <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
-    <script src="script.js"></script>
+    <script>
+        let scrapedAds = [];
+
+        const urlInput = document.getElementById('transparency-url');
+        const startBtn = document.getElementById('start-btn');
+        const progressSection = document.getElementById('progress-section');
+        const resultsSection = document.getElementById('results-section');
+        const errorSection = document.getElementById('error-section');
+        const errorText = document.getElementById('error-text');
+        const resultsTableBody = document.getElementById('results-tbody');
+        const totalCount = document.getElementById('total-count');
+        const statusSpan = document.getElementById('current-status');
+
+        startBtn.addEventListener('click', startScraping);
+        document.getElementById('export-excel-btn').addEventListener('click', exportToExcel);
+        document.getElementById('clear-results-btn').addEventListener('click', clearResults);
+        document.getElementById('retry-btn').addEventListener('click', () => {
+            errorSection.style.display = 'none';
+        });
+
+        urlInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') startScraping();
+        });
+
+        async function startScraping() {
+            const url = urlInput.value.trim();
+
+            if (!url || !url.includes('adstransparency.google.com')) {
+                showError('Please enter a valid Google Ads Transparency URL');
+                return;
+            }
+
+            // Show progress
+            startBtn.disabled = true;
+            progressSection.style.display = 'block';
+            resultsSection.style.display = 'none';
+            errorSection.style.display = 'none';
+            statusSpan.textContent = 'Fetching ads from SerpAPI...';
+
+            try {
+                const response = await fetch('/api/scrape', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ url })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Scraping failed');
+                }
+
+                scrapedAds = data.ads;
+                displayResults();
+
+            } catch (error) {
+                showError(error.message);
+            } finally {
+                startBtn.disabled = false;
+                progressSection.style.display = 'none';
+            }
+        }
+
+        function displayResults() {
+            resultsTableBody.innerHTML = '';
+            totalCount.textContent = scrapedAds.length;
+
+            if (scrapedAds.length === 0) {
+                resultsTableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #666;">No ads found</td></tr>';
+                resultsSection.style.display = 'block';
+                return;
+            }
+
+            scrapedAds.forEach(ad => {
+                const row = document.createElement('tr');
+
+                const imageHtml = ad.image
+                    ? `<img src="${ad.image}" alt="Ad" style="width: 60px; height: 60px; object-fit: cover; border-radius: 4px;" onerror="this.style.display='none'">`
+                    : '-';
+
+                row.innerHTML = `
+                    <td><strong>${escapeHtml(ad.advertiser)}</strong></td>
+                    <td><code>${escapeHtml(ad.advertiserId || '-')}</code></td>
+                    <td><code style="font-size: 10px;">${escapeHtml(ad.creativeId || '-')}</code></td>
+                    <td><span class="badge badge-${ad.format.toLowerCase()}">${ad.format}</span></td>
+                    <td>${imageHtml}</td>
+                    <td>${ad.dateRange}</td>
+                `;
+
+                resultsTableBody.appendChild(row);
+            });
+
+            resultsSection.style.display = 'block';
+        }
+
+        function exportToExcel() {
+            if (scrapedAds.length === 0) {
+                showError('No data to export');
+                return;
+            }
+
+            const wsData = [
+                ['Advertiser', 'Advertiser ID', 'Creative ID', 'Format', 'Image URL', 'Date Range', 'Details URL', 'Scraped At']
+            ];
+
+            scrapedAds.forEach(ad => {
+                wsData.push([
+                    ad.advertiser,
+                    ad.advertiserId,
+                    ad.creativeId,
+                    ad.format,
+                    ad.image || '',
+                    ad.dateRange,
+                    ad.url,
+                    new Date().toLocaleString()
+                ]);
+            });
+
+            const ws = XLSX.utils.aoa_to_sheet(wsData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'Scraped Ads');
+
+            const timestamp = new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-');
+            XLSX.writeFile(wb, `google-ads-${timestamp}.xlsx`);
+        }
+
+        function clearResults() {
+            scrapedAds = [];
+            resultsSection.style.display = 'none';
+            urlInput.value = '';
+        }
+
+        function showError(message) {
+            errorText.textContent = message;
+            errorSection.style.display = 'block';
+            progressSection.style.display = 'none';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+
+    <style>
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .example-urls {
+            margin-top: 15px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .example-urls code {
+            display: block;
+            margin-top: 5px;
+            padding: 8px;
+            background: #e9ecef;
+            border-radius: 4px;
+            word-break: break-all;
+        }
+
+        .error-section {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+            border-left: 4px solid #ff6b6b;
+        }
+
+        .error-message h3 {
+            color: #ff6b6b;
+            margin-bottom: 10px;
+        }
+
+        .badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .badge-text { background: #e3f2fd; color: #1976d2; }
+        .badge-display { background: #f3e5f5; color: #7b1fa2; }
+        .badge-video { background: #e8f5e9; color: #388e3c; }
+        .badge-unknown { background: #f5f5f5; color: #666; }
+    </style>
 </body>
 </html>

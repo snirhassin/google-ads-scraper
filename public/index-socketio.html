@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Google Ads Transparency Scraper</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Google Ads Transparency Scraper</h1>
+            <p>Extract ad data from Google Ads Transparency pages</p>
+        </header>
+
+        <main>
+            <section class="input-section">
+                <div class="url-input-group">
+                    <label for="transparency-url">Enter Google Ads Transparency URL:</label>
+                    <input 
+                        type="url" 
+                        id="transparency-url" 
+                        placeholder="https://adstransparency.google.com/?region=anywhere&domain=example.com"
+                        required
+                    >
+                    <div class="button-group">
+                        <button id="start-btn" class="btn btn-primary">Start Scraping</button>
+                        <button id="stop-btn" class="btn btn-danger" disabled>Stop</button>
+                        <button id="resume-btn" class="btn btn-warning" disabled>Resume</button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="progress-section" style="display: none;">
+                <div class="progress-info">
+                    <h3>Scraping Progress</h3>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                    <div class="progress-stats">
+                        <span id="ads-scraped">0</span> ads scraped | 
+                        <span id="current-status">Initializing...</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="results-section" style="display: none;">
+                <div class="results-header">
+                    <h3>Scraped Ads Data</h3>
+                    <div class="results-actions">
+                        <button id="export-excel-btn" class="btn btn-success">Export to Excel</button>
+                        <button id="clear-results-btn" class="btn btn-secondary">Clear Results</button>
+                    </div>
+                </div>
+                <div class="results-table-container">
+                    <table id="results-table">
+                        <thead>
+                            <tr>
+                                <th>Ad Title</th>
+                                <th>Description</th>
+                                <th>URL</th>
+                                <th>Images</th>
+                                <th>Format</th>
+                                <th>Date Range</th>
+                            </tr>
+                        </thead>
+                        <tbody id="results-tbody">
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <div id="loading-overlay" class="loading-overlay" style="display: none;">
+        <div class="loading-spinner"></div>
+        <p>Initializing scraper...</p>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
