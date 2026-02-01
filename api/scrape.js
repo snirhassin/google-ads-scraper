@@ -179,8 +179,11 @@ async function fetchAdDetails(ads, apiKey) {
 
         if (details.error) return;
 
-        // Extract ad content from details
-        const adDetails = details.ad_creative || {};
+        // Store full response for debugging
+        ad.detailsApiResponse = details;
+
+        // The details might be in different places depending on the response
+        const adDetails = details.ad_creative || details.creative || details || {};
 
         // Update ad with detailed information
         ad.headline = adDetails.headline || adDetails.title || ad.headline || '';
