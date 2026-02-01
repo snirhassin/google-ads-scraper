@@ -129,8 +129,10 @@ module.exports = async function handler(req, res) {
 
     // Extract text from images using Claude's vision
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+    let visionStats = { attempted: 0, successful: 0, failed: 0, errors: [] };
+
     if (enableOcr && anthropicApiKey && ads.length > 0) {
-      await extractTextFromAds(ads.slice(0, ocrLimit));
+      visionStats = await extractTextFromAds(ads.slice(0, ocrLimit));
     }
 
     return res.status(200).json({
@@ -141,6 +143,7 @@ module.exports = async function handler(req, res) {
       detailsLimit: detailsLimit,
       visionEnabled: enableOcr && !!anthropicApiKey,
       visionLimit: ocrLimit,
+      visionStats: visionStats,
       ads: ads
     });
 
@@ -461,6 +464,7 @@ function delay(ms) {
 // Extract text from ad images using Claude's vision
 async function extractTextFromAds(ads) {
   const batchSize = 3; // Process 3 ads at a time (Claude rate limits)
+  const stats = { attempted: 0, successful: 0, failed: 0, errors: [] };
 
   for (let i = 0; i < ads.length; i += batchSize) {
     const batch = ads.slice(i, i + batchSize);
@@ -468,8 +472,12 @@ async function extractTextFromAds(ads) {
     await Promise.all(batch.map(async (ad) => {
       try {
         const imageUrl = ad.image || ad.imageUrl;
-        if (!imageUrl) return;
+        if (!imageUrl) {
+          stats.errors.push({ id: ad.id, error: 'No image URL' });
+          return;
+        }
 
+        stats.attempted++;
         const extracted = await extractTextWithClaude(imageUrl);
 
         if (extracted) {
@@ -494,8 +502,14 @@ async function extractTextFromAds(ads) {
           }
 
           ad.visionProcessed = true;
+          stats.successful++;
+        } else {
+          stats.failed++;
+          stats.errors.push({ id: ad.id, error: 'extractTextWithClaude returned null' });
         }
       } catch (error) {
+        stats.failed++;
+        stats.errors.push({ id: ad.id, error: error.message });
         console.error(`Vision extraction failed for ad ${ad.id}: ${error.message}`);
       }
     }));
@@ -505,4 +519,6 @@ async function extractTextFromAds(ads) {
       await delay(1000);
     }
   }
+
+  return stats;
 }
