@@ -83,7 +83,7 @@ Only include fields that are clearly visible. Use empty string "" for fields not
   }
 }
 
-// Vercel Serverless Function for Google Ads Transparency scraping
+// Vercel Serverless Function for Google Ads Transparency scraping (v2)
 module.exports = async function handler(req, res) {
   // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
