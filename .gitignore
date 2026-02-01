@@ -18,3 +18,12 @@ build/
 .env.production
 .env.staging
 railway.env
+
+# Generated files
+*.xlsx
+debug-*.html
+debug-*.txt
+debug-*.js
+
+# Vercel
+.vercel
