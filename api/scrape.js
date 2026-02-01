@@ -83,7 +83,7 @@ Only include fields that are clearly visible. Use empty string "" for fields not
   }
 }
 
-// Vercel Serverless Function for Google Ads Transparency scraping (v2)
+// Vercel Serverless Function for Google Ads Transparency scraping (v3-debug)
 module.exports = async function handler(req, res) {
   // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -130,9 +130,15 @@ module.exports = async function handler(req, res) {
     // Extract text from images using Claude's vision
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
     let visionStats = { attempted: 0, successful: 0, failed: 0, errors: [] };
+    let visionError = null;
 
     if (enableOcr && anthropicApiKey && ads.length > 0) {
-      visionStats = await extractTextFromAds(ads.slice(0, ocrLimit));
+      try {
+        visionStats = await extractTextFromAds(ads.slice(0, ocrLimit));
+      } catch (err) {
+        visionError = err.message;
+        console.error('Vision processing error:', err);
+      }
     }
 
     return res.status(200).json({
@@ -144,6 +150,8 @@ module.exports = async function handler(req, res) {
       visionEnabled: enableOcr && !!anthropicApiKey,
       visionLimit: ocrLimit,
       visionStats: visionStats,
+      visionError: visionError,
+      apiVersion: 'v3-debug',
       ads: ads
     });
 
