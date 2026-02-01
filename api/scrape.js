@@ -1,11 +1,34 @@
 const axios = require('axios');
 
+// Fetch image and convert to base64
+async function fetchImageAsBase64(imageUrl) {
+  try {
+    const response = await axios.get(imageUrl, {
+      responseType: 'arraybuffer',
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+    const base64 = Buffer.from(response.data).toString('base64');
+    const contentType = response.headers['content-type'] || 'image/png';
+    return { base64, mediaType: contentType };
+  } catch (error) {
+    console.error('Image fetch error:', error.message);
+    return null;
+  }
+}
+
 // Use Claude's vision to extract text and understand ad content
 async function extractTextWithClaude(imageUrl) {
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
   if (!anthropicApiKey) return null;
 
   try {
+    // Fetch image and convert to base64
+    const imageData = await fetchImageAsBase64(imageUrl);
+    if (!imageData) return null;
+
     const response = await axios.post('https://api.anthropic.com/v1/messages', {
       model: 'claude-sonnet-4-20250514',
       max_tokens: 1024,
@@ -15,8 +38,9 @@ async function extractTextWithClaude(imageUrl) {
           {
             type: 'image',
             source: {
-              type: 'url',
-              url: imageUrl
+              type: 'base64',
+              media_type: imageData.mediaType,
+              data: imageData.base64
             }
           },
           {
