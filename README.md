@@ -1,84 +1,76 @@
-# Google Ads Transparency Scraper
+# Google Ads Transparency Scraper - Test Results
 
-A web-based tool for scraping and analyzing Google Ads Transparency data using the SerpAPI, with a user-friendly interface.
+## Goal
+Test if Apify can extract ad texts from Google Ads Transparency Center WITHOUT needing OCR.
 
-## Features
+## Target URL
+https://adstransparency.google.com/advertiser/AR18082589962938613761?region=US
 
-- **Web UI**: Simple interface to input Google Ads Transparency URLs
-- **Real-time Progress**: Live progress indicators and status updates
-- **Control Functions**: Start, stop, and resume scraping operations
-- **Data Extraction**: Scrapes advertiser names, creative IDs, images, and formats
-- **Pagination**: Automatically handles pagination (up to 100 ads per request)
-- **Excel Export**: Download scraped data as Excel files
-- **Real-time Updates**: WebSocket-based live updates
+## CONCLUSION: OCR IS REQUIRED
 
-## API: SerpAPI
+### Finding
+Google Ads Transparency Center renders **ALL ads as pre-rendered images**, including "Text" format ads. The ad text (headlines, descriptions, URLs) is NOT in the DOM.
 
-This scraper uses [SerpAPI's Google Ads Transparency Center API](https://serpapi.com/google-ads-transparency-center-api) which provides:
-- Structured JSON responses (no HTML parsing needed)
-- Up to 100 results per request
-- Built-in pagination support
-- Higher reliability than web scraping
+### Evidence
 
-## Deployment
+1. **HTML Analysis**: Searched for key terms in page HTML:
+   - "Sponsored" - NOT FOUND
+   - "BUYEREVIEWS" - NOT FOUND
+   - "Induction Cooktop" - NOT FOUND
+   - "10 Best" - NOT FOUND
 
-### Deploy to Railway
+2. **Image Sources**: Found multiple images from `tpc.googlesyndication.com/archive/simgad/` - these ARE the ad creatives rendered as images
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/your-template-id)
+3. **Page Structure**: The visible ad preview card is an image, not DOM elements with text
 
-1. Click the "Deploy on Railway" button above
-2. Connect your GitHub account and fork this repository
-3. Railway will automatically deploy your app
-4. Set environment variables in Railway:
-   - `NODE_ENV=production`
-   - `SERPAPI_API_KEY=your_api_key_here`
-5. Access your deployed app at the provided Railway URL
+4. **Format Label**: "Format: Text" only describes the original ad type - it's still rendered as an image for display
 
-### Local Development
+### What IS Available Without OCR
 
-```bash
-# Install dependencies
-npm install
+| Data | Available | Source |
+|------|-----------|--------|
+| Advertiser name | ✅ Yes | DOM text |
+| Last shown date | ✅ Yes | DOM text |
+| Ad format (Text/Image/Video) | ✅ Yes | DOM text |
+| Region shown | ✅ Yes | DOM text |
+| **Ad headline** | ❌ No | Image only |
+| **Ad description** | ❌ No | Image only |
+| **Display URL** | ❌ No | Image only |
+| **Sitelinks** | ❌ No | Image only |
+| **Promo text** | ❌ No | Image only |
 
-# Set your SerpAPI key
-cp .env.example .env
-# Edit .env and add your SERPAPI_API_KEY
+### Recommendation for Apify
 
-# Start the server
-npm run start:full
-```
+1. **Keep OCR step** - It's required to extract actual ad content
+2. **Image URLs are available** - Can download from `tpc.googlesyndication.com/archive/simgad/{id}`
+3. **Metadata is scrapable** - Advertiser name, dates, format, region
 
-Open your browser and navigate to `http://localhost:3000`
+### Alternative Approaches
 
-## Usage
+1. **Use Google Ads API** (if available for this data)
+2. **Screenshot + OCR** - Take screenshots and run OCR
+3. **Image download + Vision AI** - Download ad images and use GPT-4V or similar
 
-1. Enter a Google Ads Transparency URL:
-   - By domain: `https://adstransparency.google.com/?region=anywhere&domain=example.com`
-   - By advertiser: `https://adstransparency.google.com/advertiser/AR17828074650563772417`
+## Files
 
-2. Click "Start Scraping" and monitor the progress
+| File | Description |
+|------|-------------|
+| `scrape-google-ads.js` | Initial scraper - gets ad URLs |
+| `scrape-ads-v2.js` | Attempted text extraction |
+| `scrape-final.js` | Final attempt at DOM scraping |
+| `debug-page.js` | Debug script for page analysis |
+| `debug-html.js` | HTML structure analysis |
+| `debug-screenshot.png` | Screenshot showing ad preview |
+| `debug-full.html` | Full page HTML (2.7MB) |
 
-3. View results and export to Excel when complete
+## Test Run Summary
 
-## Example URLs
+- **Ads found**: 40-80 per advertiser page
+- **Text extractable from DOM**: 0%
+- **Ad previews**: Rendered as images
+- **OCR requirement**: CONFIRMED
 
-- `https://adstransparency.google.com/?region=anywhere&domain=buyereviews.com`
-- `https://adstransparency.google.com/?region=anywhere&domain=amazon.com`
-- `https://adstransparency.google.com/?region=US&domain=walmart.com`
+---
 
-## Requirements
-
-- Node.js 18+
-- SerpAPI key (get one at [serpapi.com](https://serpapi.com))
-
-## Environment Variables
-
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `SERPAPI_API_KEY` | Your SerpAPI API key | Yes |
-| `PORT` | Server port (default: 3000) | No |
-| `NODE_ENV` | Environment (development/production) | No |
-
-## License
-
-MIT
+**Last Updated:** Feb 2026
+**Status:** Testing complete - OCR confirmed required

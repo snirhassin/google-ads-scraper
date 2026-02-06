@@ -2,7 +2,13 @@
   "version": 2,
   "functions": {
     "api/scrape.js": {
-      "maxDuration": 60
+      "maxDuration": 300
+    },
+    "api/scrape-apify.js": {
+      "maxDuration": 300
+    },
+    "api/ocr-batch.js": {
+      "maxDuration": 300
     }
   }
 }

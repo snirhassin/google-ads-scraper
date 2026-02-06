@@ -22,12 +22,16 @@ async function fetchImageAsBase64(imageUrl) {
 // Use Claude's vision to extract text and understand ad content
 async function extractTextWithClaude(imageUrl) {
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-  if (!anthropicApiKey) return null;
+  if (!anthropicApiKey) {
+    return { error: 'ANTHROPIC_API_KEY not configured' };
+  }
 
   try {
     // Fetch image and convert to base64
     const imageData = await fetchImageAsBase64(imageUrl);
-    if (!imageData) return null;
+    if (!imageData) {
+      return { error: 'Failed to fetch image' };
+    }
 
     const response = await axios.post('https://api.anthropic.com/v1/messages', {
       model: 'claude-sonnet-4-20250514',
@@ -75,11 +79,13 @@ Only include fields that are clearly visible. Use empty string "" for fields not
       if (jsonMatch) {
         return JSON.parse(jsonMatch[0]);
       }
+      return { error: 'No JSON found in response', raw: text.slice(0, 200) };
     }
-    return null;
+    return { error: 'Empty response from Claude' };
   } catch (error) {
-    console.error('Claude vision error:', error.response?.data || error.message);
-    return null;
+    const errMsg = error.response?.data?.error?.message || error.message;
+    console.error('Claude vision error:', errMsg);
+    return { error: `Claude API error: ${errMsg}` };
   }
 }
 
@@ -109,7 +115,13 @@ module.exports = async function handler(req, res) {
 
   // Option to enable OCR text extraction from images (default: true if API key exists)
   const enableOcr = req.body?.enableOcr !== false;
-  const ocrLimit = req.body?.ocrLimit || 50; // Limit OCR to first N ads for performance
+  const ocrLimit = req.body?.ocrLimit || 100; // Limit OCR to first N ads (default 100)
+
+  // Max pages to fetch (each page = 100 ads, default 50 = 5000 ads max)
+  const maxPages = req.body?.maxPages || 50;
+
+  // Optional: continue from a previous pagination token
+  const startPageToken = req.body?.pageToken || null;
 
   if (!url || !url.includes('adstransparency.google.com')) {
     return res.status(400).json({
@@ -125,7 +137,8 @@ module.exports = async function handler(req, res) {
 
   try {
     const searchParams = parseTransparencyUrl(url);
-    const ads = await fetchAdsFromSerpApi(searchParams, apiKey, fetchDetails, detailsLimit);
+    const result = await fetchAdsFromSerpApi(searchParams, apiKey, fetchDetails, detailsLimit, maxPages, startPageToken);
+    const ads = result.ads;
 
     // Extract text from images using Claude's vision
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
@@ -147,11 +160,15 @@ module.exports = async function handler(req, res) {
       url: url,
       fetchedDetails: fetchDetails,
       detailsLimit: detailsLimit,
+      maxPages: maxPages,
+      maxAdsLimit: maxPages * 100,
+      hasMorePages: result.hasMorePages,
+      nextPageToken: result.nextPageToken,
       visionEnabled: enableOcr && !!anthropicApiKey,
       visionLimit: ocrLimit,
       visionStats: visionStats,
       visionError: visionError,
-      apiVersion: 'v3-debug',
+      apiVersion: 'v5',
       ads: ads
     });
 
@@ -210,11 +227,12 @@ function mapRegion(region) {
   return regionMap[region?.toUpperCase()] || region;
 }
 
-async function fetchAdsFromSerpApi(searchParams, apiKey, fetchDetails, detailsLimit) {
+async function fetchAdsFromSerpApi(searchParams, apiKey, fetchDetails, detailsLimit, maxPages = 20, startPageToken = null) {
   const scrapedAds = [];
-  let nextPageToken = null;
+  let nextPageToken = startPageToken;
   let pageNum = 1;
-  const maxPages = 5; // Limit for serverless timeout
+  // maxPages parameter controls limit (default 20 = 2000 ads max)
+  let hasMorePages = false;
 
   do {
     const params = {
@@ -256,13 +274,16 @@ async function fetchAdsFromSerpApi(searchParams, apiKey, fetchDetails, detailsLi
 
   } while (nextPageToken && pageNum <= maxPages);
 
+  // Check if there are more pages available
+  hasMorePages = !!nextPageToken;
+
   // Fetch details for ads (in parallel batches)
   if (fetchDetails && scrapedAds.length > 0) {
     const adsToFetchDetails = scrapedAds.slice(0, detailsLimit);
     await fetchAdDetails(adsToFetchDetails, apiKey);
   }
 
-  return scrapedAds;
+  return { ads: scrapedAds, nextPageToken: hasMorePages ? nextPageToken : null, hasMorePages };
 }
 
 async function fetchAdDetails(ads, apiKey) {
@@ -488,7 +509,14 @@ async function extractTextFromAds(ads) {
         stats.attempted++;
         const extracted = await extractTextWithClaude(imageUrl);
 
-        if (extracted) {
+        // Check if we got an error object
+        if (extracted && extracted.error) {
+          stats.failed++;
+          stats.errors.push({ id: ad.id, error: extracted.error });
+          return;
+        }
+
+        if (extracted && extracted.headline) {
           // Apply Claude's extracted data
           if (extracted.headline && !ad.headline) {
             ad.headline = extracted.headline;
@@ -513,7 +541,7 @@ async function extractTextFromAds(ads) {
           stats.successful++;
         } else {
           stats.failed++;
-          stats.errors.push({ id: ad.id, error: 'extractTextWithClaude returned null' });
+          stats.errors.push({ id: ad.id, error: 'No valid data extracted' });
         }
       } catch (error) {
         stats.failed++;

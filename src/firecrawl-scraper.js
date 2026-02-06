@@ -37,33 +37,10 @@ class FirecrawlAdsScraper {
     this.totalPagesScraped = 0;
 
     try {
-      this.socket.emit('status-update', { message: 'Starting Firecrawl scraping...' });
+      this.socket.emit('status-update', { message: 'Starting optimized Firecrawl scraping...' });
       
-      // Use Firecrawl's crawl endpoint to handle pagination automatically
-      const crawlResult = await this.firecrawl.crawlUrl(url, {
-        crawlerOptions: {
-          includes: [url + '*'], // Only crawl pages within the transparency domain
-          excludes: [],
-          generateImgAltText: false,
-          returnOnlyUrls: false,
-          maxDepth: 2,
-          limit: 50 // Limit to prevent excessive crawling
-        },
-        pageOptions: {
-          onlyMainContent: true,
-          includeHtml: true,
-          includeRawHtml: false,
-          waitFor: 3000, // Wait for JavaScript to load
-          screenshot: false
-        }
-      });
-
-      if (crawlResult.success) {
-        await this.processCrawlResults(crawlResult);
-      } else {
-        // Fallback to single page scrape if crawl fails
-        await this.scrapeSinglePage(url);
-      }
+      // Use single page scraping to avoid rate limits from crawling
+      await this.scrapeSinglePage(url);
       
       this.socket.emit('scraping-complete', {
         ads: this.scrapedAds,
@@ -73,6 +50,7 @@ class FirecrawlAdsScraper {
     } catch (error) {
       console.error('Firecrawl scraping error:', error);
       this.socket.emit('error', { message: `Scraping failed: ${error.message}` });
+      throw error; // Re-throw for test script
     }
   }
 
@@ -104,14 +82,74 @@ class FirecrawlAdsScraper {
   }
 
   async scrapeSinglePage(url) {
-    this.socket.emit('status-update', { message: 'Scraping single page with Firecrawl...' });
+    this.socket.emit('status-update', { message: 'Scraping with pagination support...' });
+    
+    // First, try to get all ads using crawling with actions
+    try {
+      const crawlResult = await this.firecrawl.crawlUrl(url, {
+        crawlerOptions: {
+          includes: [url + '*'],
+          excludes: [],
+          generateImgAltText: false,
+          returnOnlyUrls: false,
+          maxDepth: 1,
+          limit: 10
+        },
+        pageOptions: {
+          onlyMainContent: false, // Get full page to detect "See all ads"
+          includeHtml: true,
+          includeRawHtml: false,
+          waitFor: 10000, // Wait longer for dynamic content
+          screenshot: false,
+          actions: [
+            {
+              type: 'click',
+              selector: 'material-button.grid-expansion-button',
+              waitTime: 5000 // Wait after clicking "See all ads"
+            }
+          ]
+        }
+      });
+
+      if (crawlResult.success && crawlResult.data && crawlResult.data.length > 0) {
+        this.socket.emit('status-update', { message: 'Processing crawled pages with expanded content...' });
+        
+        // Process all pages from crawling
+        for (const pageData of crawlResult.data) {
+          const ads = this.extractAdsFromContent(
+            pageData.content,
+            pageData.metadata,
+            pageData.html
+          );
+          this.scrapedAds.push(...ads);
+        }
+        
+        this.totalPagesScraped = crawlResult.data.length;
+        
+        this.socket.emit('progress-update', {
+          adsScraped: this.scrapedAds.length,
+          currentPage: crawlResult.data.length,
+          totalPages: crawlResult.data.length
+        });
+        
+        // If crawling with actions worked, we're done
+        if (this.scrapedAds.length > 4) {
+          return;
+        }
+      }
+    } catch (crawlError) {
+      console.log('Crawl with actions failed, falling back to enhanced scraping:', crawlError.message);
+    }
+
+    // Fallback: Enhanced single page scraping with longer wait time
+    this.socket.emit('status-update', { message: 'Using enhanced scraping fallback...' });
     
     const scrapeResult = await this.firecrawl.scrapeUrl(url, {
       pageOptions: {
-        onlyMainContent: true,
+        onlyMainContent: false,
         includeHtml: true,
-        includeRawHtml: false,
-        waitFor: 5000,
+        includeRawHtml: true,
+        waitFor: 15000, // Wait longer for all content to potentially load
         screenshot: false
       }
     });
@@ -221,31 +259,124 @@ class FirecrawlAdsScraper {
   extractAdsFromText(content) {
     const ads = [];
     
-    // Split content into potential ad blocks
-    const blocks = content.split(/\n\s*\n/).filter(block => block.trim().length > 20);
+    // Google Ads Transparency specific patterns - enhanced to catch more variations
+    const transparencyPatterns = [
+      /\[!\[\]\((https:\/\/tpc\.googlesyndication\.com\/archive\/simgad\/\d+)\)\]\((https:\/\/adstransparency\.google\.com\/advertiser\/[^)]+)\)\s*\n\s*([^\n]+)\s*\n\s*(Verified|Not verified)/g,
+      /https:\/\/tpc\.googlesyndication\.com\/archive\/simgad\/(\d+)[\s\S]*?https:\/\/adstransparency\.google\.com\/advertiser\/(AR\w+)\/creative\/(CR\w+)[\s\S]*?([A-Z\s&]+INC|[A-Z\s&]+LLC|[A-Z\s&]+CORP|[A-Z\s&]+LTD|[A-Z][A-Za-z\s&]+)[\s\S]*?(Verified|Not verified)/g
+    ];
     
-    blocks.forEach((block, index) => {
-      // Look for URL patterns
-      const urlMatch = block.match(/https?:\/\/[^\s]+/);
+    let adIndex = 0;
+    
+    // Try multiple patterns to extract Google Ads Transparency format
+    for (const pattern of transparencyPatterns) {
+      let match;
+      pattern.lastIndex = 0; // Reset pattern
       
-      // Look for common ad indicators
-      if (urlMatch || block.includes('Ad') || block.includes('Sponsored')) {
-        const lines = block.split('\n').map(line => line.trim()).filter(line => line);
+      while ((match = pattern.exec(content)) !== null) {
+        let imageUrl, detailUrl, advertiserName, verificationStatus, creativeId, advertiserId;
         
-        if (lines.length >= 2) {
+        if (match.length === 5) {
+          // First pattern format
+          [, imageUrl, detailUrl, advertiserName, verificationStatus] = match;
+          const creativeMatch = detailUrl.match(/creative\/([^?]+)/);
+          const advertiserMatch = detailUrl.match(/advertiser\/([^/]+)/);
+          creativeId = creativeMatch ? creativeMatch[1] : null;
+          advertiserId = advertiserMatch ? advertiserMatch[1] : null;
+        } else if (match.length === 6) {
+          // Second pattern format
+          [, imageUrl, advertiserId, creativeId, advertiserName, verificationStatus] = match;
+          detailUrl = `https://adstransparency.google.com/advertiser/${advertiserId}/creative/${creativeId}?region=anywhere`;
+          imageUrl = `https://tpc.googlesyndication.com/archive/simgad/${imageUrl}`;
+        }
+        
+        // Avoid duplicates
+        const existingAd = ads.find(ad => 
+          ad.metadata?.creativeId === creativeId || 
+          ad.url === detailUrl ||
+          ad.images.includes(imageUrl)
+        );
+        
+        if (!existingAd && advertiserName && verificationStatus) {
           ads.push({
-            id: `text_ad_${Date.now()}_${index}`,
-            title: lines[0] || 'Extracted from text',
-            description: lines.slice(1).join(' | '),
-            url: urlMatch ? urlMatch[0] : 'No URL found',
-            images: [],
-            format: 'Text',
-            dateRange: this.extractDateRange(block) || 'Unknown',
-            source: 'Text extraction'
+            id: `transparency_ad_${Date.now()}_${adIndex}`,
+            title: advertiserName.trim() || 'Google Ads Transparency Ad',
+            description: `${verificationStatus} advertiser on Google Ads Transparency. Creative ID: ${creativeId || 'Unknown'}, Advertiser ID: ${advertiserId || 'Unknown'}`,
+            url: detailUrl,
+            images: imageUrl ? [imageUrl] : [],
+            format: 'Display',
+            dateRange: 'Current',
+            source: 'Google Ads Transparency',
+            metadata: {
+              advertiser: advertiserName.trim(),
+              verified: verificationStatus === 'Verified',
+              creativeId: creativeId,
+              advertiserId: advertiserId
+            }
           });
+          
+          adIndex++;
         }
       }
-    });
+    }
+    
+    // Fallback: Look for advertiser patterns in the content
+    if (ads.length === 0) {
+      const lines = content.split('\n').map(line => line.trim()).filter(line => line);
+      
+      for (let i = 0; i < lines.length - 2; i++) {
+        const currentLine = lines[i];
+        const nextLine = lines[i + 1];
+        const thirdLine = lines[i + 2];
+        
+        // Look for Google Ads image pattern
+        if (currentLine.includes('tpc.googlesyndication.com') && 
+            nextLine && nextLine.length > 0 && 
+            thirdLine === 'Verified') {
+          
+          const imageMatch = currentLine.match(/https:\/\/tpc\.googlesyndication\.com\/archive\/simgad\/\d+/);
+          const linkMatch = currentLine.match(/https:\/\/adstransparency\.google\.com\/advertiser\/[^\)]+/);
+          
+          if (imageMatch || linkMatch) {
+            ads.push({
+              id: `fallback_ad_${Date.now()}_${i}`,
+              title: nextLine || 'Google Ads Transparency Ad',
+              description: `Verified advertiser on Google Ads Transparency`,
+              url: linkMatch ? linkMatch[0] : 'No URL found',
+              images: imageMatch ? [imageMatch[0]] : [],
+              format: 'Display',
+              dateRange: 'Current',
+              source: 'Google Ads Transparency Fallback'
+            });
+          }
+        }
+      }
+    }
+    
+    // Original fallback logic for other ad formats
+    if (ads.length === 0) {
+      const blocks = content.split(/\n\s*\n/).filter(block => block.trim().length > 20);
+      
+      blocks.forEach((block, index) => {
+        const urlMatch = block.match(/https?:\/\/[^\s]+/);
+        
+        if (urlMatch || block.includes('Ad') || block.includes('Sponsored')) {
+          const blockLines = block.split('\n').map(line => line.trim()).filter(line => line);
+          
+          if (blockLines.length >= 2) {
+            ads.push({
+              id: `text_ad_${Date.now()}_${index}`,
+              title: blockLines[0] || 'Extracted from text',
+              description: blockLines.slice(1).join(' | '),
+              url: urlMatch ? urlMatch[0] : 'No URL found',
+              images: [],
+              format: 'Text',
+              dateRange: this.extractDateRange(block) || 'Unknown',
+              source: 'Text extraction'
+            });
+          }
+        }
+      });
+    }
 
     return ads;
   }

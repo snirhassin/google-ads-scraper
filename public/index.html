@@ -10,7 +10,7 @@
     <div class="container">
         <header>
             <h1>Google Ads Transparency Scraper</h1>
-            <p>Extract ad data from Google Ads Transparency pages using SerpAPI</p>
+            <p>Extract ad data from Google Ads Transparency pages using SerpAPI + Claude Vision OCR</p>
         </header>
 
         <main>
@@ -23,13 +23,33 @@
                         placeholder="https://adstransparency.google.com/?region=anywhere&domain=example.com"
                         required
                     >
+                    <div class="scraper-options">
+                        <label for="scraper-select">Scraper:</label>
+                        <select id="scraper-select">
+                            <option value="apify" selected>Apify (default)</option>
+                            <option value="serpapi">SerpAPI (faster for large advertisers)</option>
+                        </select>
+                    </div>
                     <div class="button-group">
                         <button id="start-btn" class="btn btn-primary">Start Scraping</button>
+                        <button id="load-saved-btn" class="btn btn-secondary">Load Saved</button>
                     </div>
                 </div>
                 <div class="example-urls">
                     <p><strong>Example URLs:</strong></p>
                     <code>https://adstransparency.google.com/?region=anywhere&domain=amazon.com</code>
+                    <code>https://adstransparency.google.com/advertiser/AR18082589962938613761?region=US</code>
+                </div>
+            </section>
+
+            <!-- Saved Sessions Modal -->
+            <section class="saved-sessions-section" id="saved-sessions-section" style="display: none;">
+                <div class="saved-sessions-header">
+                    <h3>Saved Sessions</h3>
+                    <button id="close-saved-btn" class="btn btn-small btn-secondary">Close</button>
+                </div>
+                <div class="saved-sessions-list" id="saved-sessions-list">
+                    <p class="no-saved">No saved sessions found</p>
                 </div>
             </section>
 
@@ -37,23 +57,55 @@
                 <div class="progress-info">
                     <h3>Scraping in Progress</h3>
                     <div class="progress-bar">
-                        <div class="progress-fill" id="progress-fill" style="width: 100%; animation: pulse 1.5s infinite;"></div>
+                        <div class="progress-fill" id="progress-fill"></div>
                     </div>
-                    <div class="progress-stats">
-                        <span id="current-status">Fetching ads from SerpAPI...</span>
+                    <div class="progress-details">
+                        <div class="progress-stats">
+                            <span id="current-status">Initializing...</span>
+                        </div>
+                        <div class="progress-numbers">
+                            <span id="ads-count">0 ads</span>
+                            <span class="separator">•</span>
+                            <span id="elapsed-time">0:00</span>
+                            <span class="separator">•</span>
+                            <span id="eta">ETA: calculating...</span>
+                        </div>
+                    </div>
+                    <div class="progress-phases" id="progress-phases">
+                        <div class="phase active" id="phase-fetch">
+                            <span class="phase-icon">●</span>
+                            <span class="phase-text">Fetching ads from SerpAPI (up to 5000)</span>
+                        </div>
+                        <div class="phase" id="phase-details">
+                            <span class="phase-icon">○</span>
+                            <span class="phase-text">Loading ad details (100 ads)</span>
+                        </div>
+                        <div class="phase" id="phase-ocr">
+                            <span class="phase-icon">○</span>
+                            <span class="phase-text">AI text extraction (after scraping)</span>
+                        </div>
                     </div>
                 </div>
             </section>
 
             <section class="results-section" id="results-section" style="display: none;">
                 <div class="results-header">
-                    <h3>Scraped Ads Data (<span id="total-count">0</span> ads)</h3>
+                    <h3>Scraped Ads Data (<span id="total-count">0</span> ads) <span id="vision-stats" class="vision-stats"></span></h3>
                     <div class="results-actions">
-                        <button id="export-excel-btn" class="btn btn-success">Export to Excel</button>
+                        <button id="save-results-btn" class="btn btn-warning">Save Results</button>
+                        <button id="export-excel-btn" class="btn btn-success">Export Excel</button>
                         <button id="export-json-btn" class="btn btn-primary">Export JSON</button>
-                        <button id="clear-results-btn" class="btn btn-secondary">Clear Results</button>
+                        <button id="clear-results-btn" class="btn btn-secondary">Clear</button>
                     </div>
                 </div>
+                <div class="ocr-controls" id="ocr-controls">
+                    <span class="ocr-label">AI Text Extraction:</span>
+                    <button id="start-ocr-btn" class="btn btn-primary">Start OCR for All Ads</button>
+                    <button id="stop-ocr-btn" class="btn btn-secondary" style="display: none;">Stop OCR</button>
+                    <span id="ocr-progress-display"><span id="ocr-progress">0/0</span> processed</span>
+                    <span id="ocr-status"></span>
+                </div>
+                <div class="results-meta" id="results-meta"></div>
                 <div class="results-table-container">
                     <table id="results-table">
                         <thead>
@@ -82,11 +134,131 @@
                 </div>
             </section>
         </main>
+
+        <footer>
+            <p>Powered by <a href="https://serpapi.com" target="_blank">SerpAPI</a> + <a href="https://anthropic.com" target="_blank">Claude Vision</a></p>
+        </footer>
+    </div>
+
+    <!-- Save Dialog -->
+    <div class="modal" id="save-modal" style="display: none;">
+        <div class="modal-content">
+            <h3>Save Results</h3>
+            <div class="form-group">
+                <label for="save-name">Session Name:</label>
+                <input type="text" id="save-name" placeholder="e.g., Amazon Ads Analysis">
+            </div>
+            <div class="modal-actions">
+                <button id="confirm-save-btn" class="btn btn-primary">Save</button>
+                <button id="cancel-save-btn" class="btn btn-secondary">Cancel</button>
+            </div>
+        </div>
     </div>
 
     <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
     <script>
         let scrapedAds = [];
+        let currentMeta = {};
+
+        const STORAGE_KEY = 'google-ads-scraper-sessions';
+        const DB_NAME = 'GoogleAdsScraperDB';
+        const DB_VERSION = 1;
+        const STORE_NAME = 'sessions';
+        let db = null;
+
+        // Initialize IndexedDB
+        async function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+                request.onerror = () => reject(request.error);
+                request.onsuccess = () => {
+                    db = request.result;
+                    resolve(db);
+                };
+
+                request.onupgradeneeded = (event) => {
+                    const database = event.target.result;
+                    if (!database.objectStoreNames.contains(STORE_NAME)) {
+                        const store = database.createObjectStore(STORE_NAME, { keyPath: 'id' });
+                        store.createIndex('savedAt', 'savedAt', { unique: false });
+                    }
+                };
+            });
+        }
+
+        // Migrate from localStorage to IndexedDB
+        async function migrateFromLocalStorage() {
+            try {
+                const oldData = localStorage.getItem(STORAGE_KEY);
+                if (oldData) {
+                    const sessions = JSON.parse(oldData);
+                    for (const session of sessions) {
+                        await saveSessionToDB(session);
+                    }
+                    localStorage.removeItem(STORAGE_KEY);
+                    console.log(`Migrated ${sessions.length} sessions to IndexedDB`);
+                }
+            } catch (e) {
+                console.error('Migration error:', e);
+            }
+        }
+
+        // Save session to IndexedDB
+        async function saveSessionToDB(session) {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_NAME], 'readwrite');
+                const store = transaction.objectStore(STORE_NAME);
+                const request = store.put(session);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // Get all sessions from IndexedDB
+        async function getAllSessionsFromDB() {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_NAME], 'readonly');
+                const store = transaction.objectStore(STORE_NAME);
+                const request = store.getAll();
+                request.onsuccess = () => {
+                    const sessions = request.result.sort((a, b) =>
+                        new Date(b.savedAt) - new Date(a.savedAt)
+                    );
+                    resolve(sessions);
+                };
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // Get single session from IndexedDB
+        async function getSessionFromDB(id) {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_NAME], 'readonly');
+                const store = transaction.objectStore(STORE_NAME);
+                const request = store.get(id);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // Delete session from IndexedDB
+        async function deleteSessionFromDB(id) {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_NAME], 'readwrite');
+                const store = transaction.objectStore(STORE_NAME);
+                const request = store.delete(id);
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // Initialize DB on page load
+        initDB().then(() => {
+            migrateFromLocalStorage();
+        }).catch(err => {
+            console.error('Failed to init IndexedDB:', err);
+        });
 
         const urlInput = document.getElementById('transparency-url');
         const startBtn = document.getElementById('start-btn');
@@ -97,7 +269,14 @@
         const resultsTableBody = document.getElementById('results-tbody');
         const totalCount = document.getElementById('total-count');
         const statusSpan = document.getElementById('current-status');
+        const visionStats = document.getElementById('vision-stats');
+        const resultsMeta = document.getElementById('results-meta');
+        const savedSessionsSection = document.getElementById('saved-sessions-section');
+        const savedSessionsList = document.getElementById('saved-sessions-list');
+        const saveModal = document.getElementById('save-modal');
+        const saveNameInput = document.getElementById('save-name');
 
+        // Event Listeners
         startBtn.addEventListener('click', startScraping);
         document.getElementById('export-excel-btn').addEventListener('click', exportToExcel);
         document.getElementById('export-json-btn').addEventListener('click', exportToJson);
@@ -105,13 +284,115 @@
         document.getElementById('retry-btn').addEventListener('click', () => {
             errorSection.style.display = 'none';
         });
+        document.getElementById('load-saved-btn').addEventListener('click', showSavedSessions);
+        document.getElementById('close-saved-btn').addEventListener('click', () => {
+            savedSessionsSection.style.display = 'none';
+        });
+        document.getElementById('save-results-btn').addEventListener('click', showSaveDialog);
+        document.getElementById('confirm-save-btn').addEventListener('click', saveResults);
+        document.getElementById('cancel-save-btn').addEventListener('click', () => {
+            saveModal.style.display = 'none';
+        });
 
         urlInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') startScraping();
         });
 
+        // Progress tracking variables
+        let progressInterval = null;
+        let startTime = null;
+        let currentPhase = 0;
+        let estimatedAds = 0;
+
+        const phases = [
+            { id: 'phase-fetch', text: 'Fetching ads from SerpAPI (up to 5000)', duration: 60, adsPercent: 60 },
+            { id: 'phase-details', text: 'Loading ad details (100 ads)', duration: 60, adsPercent: 80 },
+            { id: 'phase-ocr', text: 'AI text extraction (100 images)', duration: 120, adsPercent: 100 }
+        ];
+        const totalEstimatedTime = phases.reduce((sum, p) => sum + p.duration, 0);
+
+        function updateProgress() {
+            const elapsed = (Date.now() - startTime) / 1000;
+            const elapsedMin = Math.floor(elapsed / 60);
+            const elapsedSec = Math.floor(elapsed % 60);
+            document.getElementById('elapsed-time').textContent = `${elapsedMin}:${elapsedSec.toString().padStart(2, '0')}`;
+
+            // Calculate phase and progress
+            let accumulatedTime = 0;
+            let newPhase = 0;
+            for (let i = 0; i < phases.length; i++) {
+                if (elapsed >= accumulatedTime + phases[i].duration) {
+                    accumulatedTime += phases[i].duration;
+                    newPhase = i + 1;
+                } else {
+                    newPhase = i;
+                    break;
+                }
+            }
+
+            // Update phase indicators
+            if (newPhase !== currentPhase && newPhase < phases.length) {
+                currentPhase = newPhase;
+                phases.forEach((p, i) => {
+                    const el = document.getElementById(p.id);
+                    if (i < currentPhase) {
+                        el.className = 'phase completed';
+                        el.querySelector('.phase-icon').textContent = '✓';
+                    } else if (i === currentPhase) {
+                        el.className = 'phase active';
+                        el.querySelector('.phase-icon').textContent = '●';
+                    } else {
+                        el.className = 'phase';
+                        el.querySelector('.phase-icon').textContent = '○';
+                    }
+                });
+                statusSpan.textContent = phases[currentPhase].text;
+            }
+
+            // Calculate estimated ads count
+            const progressPercent = Math.min((elapsed / totalEstimatedTime) * 100, 95);
+            document.getElementById('progress-fill').style.width = `${progressPercent}%`;
+
+            // Estimate ads based on phase
+            if (currentPhase < phases.length) {
+                const phaseProgress = (elapsed - accumulatedTime) / phases[currentPhase].duration;
+                const prevAds = currentPhase > 0 ? phases[currentPhase - 1].adsPercent : 0;
+                const targetAds = phases[currentPhase].adsPercent;
+                estimatedAds = Math.floor((prevAds + (targetAds - prevAds) * Math.min(phaseProgress, 1)) * 5);
+            }
+            document.getElementById('ads-count').textContent = `~${estimatedAds} ads`;
+
+            // ETA
+            const remaining = Math.max(totalEstimatedTime - elapsed, 0);
+            if (remaining > 0) {
+                const remMin = Math.floor(remaining / 60);
+                const remSec = Math.floor(remaining % 60);
+                document.getElementById('eta').textContent = remMin > 0
+                    ? `ETA: ${remMin}m ${remSec}s`
+                    : `ETA: ${remSec}s`;
+            } else {
+                document.getElementById('eta').textContent = 'Finishing up...';
+            }
+        }
+
+        function resetProgress() {
+            currentPhase = 0;
+            estimatedAds = 0;
+            document.getElementById('progress-fill').style.width = '0%';
+            document.getElementById('ads-count').textContent = '0 ads';
+            document.getElementById('elapsed-time').textContent = '0:00';
+            document.getElementById('eta').textContent = 'ETA: calculating...';
+            phases.forEach((p, i) => {
+                const el = document.getElementById(p.id);
+                el.className = i === 0 ? 'phase active' : 'phase';
+                el.querySelector('.phase-icon').textContent = i === 0 ? '●' : '○';
+            });
+            statusSpan.textContent = 'Initializing...';
+        }
+
         async function startScraping() {
             const url = urlInput.value.trim();
+            const scraperType = document.getElementById('scraper-select').value;
 
             if (!url || !url.includes('adstransparency.google.com')) {
                 showError('Please enter a valid Google Ads Transparency URL');
@@ -123,37 +404,337 @@
             progressSection.style.display = 'block';
             resultsSection.style.display = 'none';
             errorSection.style.display = 'none';
-            statusSpan.textContent = 'Fetching ads from SerpAPI...';
+            savedSessionsSection.style.display = 'none';
+
+            // Start progress tracking
+            resetProgress();
+            startTime = Date.now();
+            progressInterval = setInterval(updateProgress, 500);
+
+            scrapedAds = [];
 
             try {
-                const response = await fetch('/api/scrape', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ url })
-                });
-
-                const data = await response.json();
-
-                if (!response.ok) {
-                    throw new Error(data.error || 'Scraping failed');
+                if (scraperType === 'apify') {
+                    // Use Apify scraper (single request, all ads at once)
+                    await scrapeWithApify(url);
+                } else {
+                    // Use SerpAPI scraper (paginated)
+                    await scrapeWithSerpApi(url);
                 }
 
-                scrapedAds = data.ads;
+                // Stop progress updates
+                clearInterval(progressInterval);
+
+                // Show completion
+                document.getElementById('progress-fill').style.width = '100%';
+                document.getElementById('ads-count').textContent = `${scrapedAds.length} ads`;
+                statusSpan.textContent = 'Ads fetched! Click "Start OCR" to extract text.';
+
+                // Mark fetch phase as complete
+                const fetchPhase = document.getElementById('phase-fetch');
+                fetchPhase.className = 'phase completed';
+                fetchPhase.querySelector('.phase-icon').textContent = '✓';
+
+                currentMeta = {
+                    url: url,
+                    total: scrapedAds.length,
+                    scraper: scraperType,
+                    visionEnabled: false,
+                    visionStats: null,
+                    scrapedAt: new Date().toISOString()
+                };
+
                 displayResults();
 
             } catch (error) {
-                showError(error.message);
+                clearInterval(progressInterval);
+                if (scrapedAds.length > 0) {
+                    // Show partial results
+                    currentMeta = {
+                        url: url,
+                        total: scrapedAds.length,
+                        scraper: scraperType,
+                        visionEnabled: false,
+                        visionStats: null,
+                        scrapedAt: new Date().toISOString(),
+                        partial: true,
+                        error: error.message
+                    };
+                    displayResults();
+                    showNotification(`Partial results: ${scrapedAds.length} ads (${error.message})`);
+                } else {
+                    showError(error.message);
+                }
             } finally {
                 startBtn.disabled = false;
                 progressSection.style.display = 'none';
             }
         }
 
+        // SerpAPI scraper (paginated batches)
+        async function scrapeWithSerpApi(url) {
+            let pageToken = null;
+            let batchNum = 1;
+            let hasMorePages = true;
+
+            while (hasMorePages) {
+                statusSpan.textContent = `[SerpAPI] Fetching batch ${batchNum} (${scrapedAds.length} ads so far)...`;
+                document.getElementById('ads-count').textContent = `${scrapedAds.length} ads`;
+
+                const response = await fetch('/api/scrape', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url,
+                        fetchDetails: batchNum === 1,
+                        detailsLimit: 100,
+                        enableOcr: false,
+                        ocrLimit: 0,
+                        maxPages: 50,
+                        pageToken: pageToken
+                    })
+                });
+
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    const text = await response.text();
+                    if (text.includes('FUNCTION_INVOCATION_TIMEOUT')) {
+                        if (scrapedAds.length > 0) {
+                            console.warn('Timeout, continuing with partial results');
+                            break;
+                        }
+                        throw new Error('Request timed out. Try Apify instead.');
+                    }
+                    throw new Error(text.slice(0, 100) || 'Server error');
+                }
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Scraping failed');
+
+                scrapedAds = scrapedAds.concat(data.ads);
+                hasMorePages = data.hasMorePages && data.nextPageToken;
+                pageToken = data.nextPageToken;
+                batchNum++;
+
+                document.getElementById('ads-count').textContent = `${scrapedAds.length} ads`;
+
+                if (hasMorePages) {
+                    await new Promise(r => setTimeout(r, 1000));
+                }
+            }
+        }
+
+        // Apify scraper (async with polling + live preview)
+        async function scrapeWithApify(url) {
+            statusSpan.textContent = '[Apify] Starting scraper...';
+            document.getElementById('ads-count').textContent = 'Initializing...';
+
+            // Start the run
+            const startResponse = await fetch('/api/scrape-apify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url,
+                    maxResults: 10000
+                })
+            });
+
+            const startData = await startResponse.json();
+            if (!startResponse.ok && startResponse.status !== 202) {
+                throw new Error(startData.error || 'Failed to start Apify scraper');
+            }
+
+            const runId = startData.runId;
+            if (!runId) {
+                throw new Error('No run ID returned');
+            }
+
+            console.log('Apify run started:', runId);
+            statusSpan.textContent = '[Apify] Scraping in progress...';
+
+            // Show results section early with "Scraping..." indicator
+            resultsSection.style.display = 'block';
+            totalCount.textContent = '0';
+            resultsTableBody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #667eea; padding: 40px;"><div class="scraping-indicator">⏳ Scraping in progress... Ads will appear here as they are collected.</div></td></tr>';
+
+            // Poll for results
+            let attempts = 0;
+            const maxAttempts = 720;  // 60 minutes max (5s intervals)
+            let lastAdsCount = 0;
+            let lastPreviewUpdate = 0;
+
+            while (attempts < maxAttempts) {
+                await new Promise(r => setTimeout(r, 5000));  // Wait 5 seconds
+                attempts++;
+
+                const elapsedMin = Math.floor((attempts * 5) / 60);
+                const elapsedSec = (attempts * 5) % 60;
+                const elapsedStr = elapsedMin > 0 ? `${elapsedMin}m ${elapsedSec}s` : `${elapsedSec}s`;
+
+                try {
+                    const pollResponse = await fetch('/api/scrape-apify', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ runId, includePartialResults: true })
+                    });
+
+                    const pollData = await pollResponse.json();
+
+                    // Update ads count from stats
+                    const currentAdsCount = pollData.stats?.itemsScraped || pollData.stats?.itemCount || pollData.total || 0;
+
+                    if (pollData.status === 'RUNNING' || pollData.status === 'READY') {
+                        // Still running - show progress
+                        statusSpan.textContent = `[Apify] Scraping... (${elapsedStr})`;
+
+                        // Get total from response (dataset itemCount is most accurate)
+                        const totalFromDataset = pollData.total || currentAdsCount;
+
+                        if (totalFromDataset > 0) {
+                            document.getElementById('ads-count').textContent = `${totalFromDataset} ads`;
+                            totalCount.textContent = totalFromDataset;
+                        } else if (pollData.stats?.runTimeSecs) {
+                            document.getElementById('ads-count').textContent = `Running ${Math.round(pollData.stats.runTimeSecs)}s...`;
+                        }
+
+                        // Show partial results preview (update every 15 seconds if count changed)
+                        if (pollData.partialAds && pollData.partialAds.length > 0 &&
+                            (totalFromDataset > lastAdsCount || Date.now() - lastPreviewUpdate > 15000)) {
+                            scrapedAds = pollData.partialAds;
+                            lastAdsCount = totalFromDataset;
+                            lastPreviewUpdate = Date.now();
+
+                            // Update preview with first 50 ads + "more loading" message
+                            displayPartialResults(scrapedAds, totalFromDataset, true);
+                        }
+
+                        continue;
+                    }
+
+                    if (pollData.status === 'SUCCEEDED' || pollData.status === 'TIMED-OUT') {
+                        // Got results
+                        scrapedAds = pollData.ads || [];
+                        document.getElementById('ads-count').textContent = `${scrapedAds.length} ads`;
+                        totalCount.textContent = scrapedAds.length;
+
+                        if (pollData.status === 'TIMED-OUT' && scrapedAds.length > 0) {
+                            console.warn('Apify run timed out but got partial results:', scrapedAds.length);
+                        }
+                        return;
+                    }
+
+                    // Failed
+                    throw new Error(`Apify run ${pollData.status}: ${pollData.error || 'Unknown error'}`);
+
+                } catch (pollError) {
+                    console.error('Poll error:', pollError);
+                    // Continue polling on network errors
+                    if (attempts >= maxAttempts) throw pollError;
+                }
+            }
+
+            throw new Error('Apify scraping timed out after 60 minutes');
+        }
+
+        // Display partial results during scraping
+        function displayPartialResults(ads, totalExpected, isStillScraping) {
+            resultsTableBody.innerHTML = '';
+
+            // Show first 50 ads as preview
+            const previewAds = ads.slice(0, 50);
+
+            previewAds.forEach(ad => {
+                const row = createAdRow(ad);
+                resultsTableBody.appendChild(row);
+            });
+
+            // Add "more loading" row if still scraping
+            if (isStillScraping) {
+                const loadingRow = document.createElement('tr');
+                loadingRow.className = 'loading-more-row';
+                loadingRow.innerHTML = `
+                    <td colspan="8" style="text-align: center; padding: 20px; background: linear-gradient(135deg, #e8f5e9 0%, #e3f2fd 100%);">
+                        <div style="color: #667eea; font-weight: 600;">
+                            ⏳ <span style="font-size: 18px;">${totalExpected}</span> ads collected so far... Still scraping!
+                            <br><small style="font-weight: normal; color: #666;">Showing preview of first ${ads.length} ads</small>
+                        </div>
+                    </td>
+                `;
+                resultsTableBody.appendChild(loadingRow);
+            }
+        }
+
+        // Create a table row for an ad (reusable function)
+        function createAdRow(ad) {
+            const row = document.createElement('tr');
+
+            // Image
+            const imageHtml = ad.image || ad.imageUrl
+                ? `<img src="${ad.image || ad.imageUrl}" alt="Ad" class="ad-thumbnail" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2260%22 height=%2260%22><rect fill=%22%23f0f0f0%22 width=%2260%22 height=%2260%22/><text x=%2230%22 y=%2235%22 text-anchor=%22middle%22 fill=%22%23999%22 font-size=%2210%22>No img</text></svg>'">`
+                : '<span class="no-image">-</span>';
+
+            const advertiserName = ad.adFundedBy || ad.advertiser || 'Unknown';
+            const titleHeadline = ad.headline || ad.title || '-';
+            const descSnippet = ad.description || ad.text || '-';
+            const visionBadge = ad.visionProcessed ? '<span class="vision-badge">AI</span>' : '';
+
+            const visibleLink = ad.visibleLink || ad.displayUrl || ad.destinationUrl || '';
+            const visibleLinkHtml = visibleLink
+                ? `<a href="${ad.destinationUrl || visibleLink}" target="_blank" rel="noopener" class="visible-link">${escapeHtml(truncateUrl(visibleLink, 35))}</a>`
+                : '-';
+
+            const detailsHtml = ad.detailsLink
+                ? `<a href="${ad.detailsLink}" target="_blank" rel="noopener" class="btn btn-small">View</a>`
+                : '-';
+
+            const textTooltip = ad.extractedText
+                ? `title="${escapeHtml(ad.extractedText.substring(0, 500))}"`
+                : '';
+
+            row.innerHTML = `
+                <td>${imageHtml}</td>
+                <td>
+                    <strong>${escapeHtml(advertiserName)}</strong>
+                    <div class="sub-info">${escapeHtml(ad.advertiserId || '')}</div>
+                </td>
+                <td class="text-cell" ${textTooltip}>${visionBadge}${escapeHtml(titleHeadline)}</td>
+                <td class="text-cell">${escapeHtml(descSnippet)}</td>
+                <td class="url-cell">${visibleLinkHtml}</td>
+                <td><span class="badge badge-${(ad.format || 'unknown').toLowerCase()}">${ad.format || 'Unknown'}</span></td>
+                <td class="date-cell">${ad.dateRange || '-'}</td>
+                <td>${detailsHtml}</td>
+            `;
+
+            return row;
+        }
+
         function displayResults() {
             resultsTableBody.innerHTML = '';
             totalCount.textContent = scrapedAds.length;
+
+            // Show vision stats
+            if (currentMeta.visionStats && currentMeta.visionStats.attempted > 0) {
+                const vs = currentMeta.visionStats;
+                visionStats.innerHTML = `<span class="vision-badge">AI OCR: ${vs.successful}/${vs.attempted}</span>`;
+            } else {
+                visionStats.innerHTML = '';
+            }
+
+            // Update OCR controls
+            const adsWithImages = scrapedAds.filter(ad => ad.image || ad.imageUrl).length;
+            const adsProcessed = scrapedAds.filter(ad => ad.visionProcessed).length;
+            const ocrProgress = document.getElementById('ocr-progress');
+            if (ocrProgress) {
+                ocrProgress.textContent = `${adsProcessed}/${adsWithImages}`;
+            }
+
+            // Show metadata
+            if (currentMeta.url) {
+                resultsMeta.innerHTML = `
+                    <span class="meta-item">Source: ${escapeHtml(extractDomain(currentMeta.url))}</span>
+                    <span class="meta-item">Scraped: ${new Date(currentMeta.scrapedAt).toLocaleString()}</span>
+                `;
+            }
 
             if (scrapedAds.length === 0) {
                 resultsTableBody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #666;">No ads found</td></tr>';
@@ -162,59 +743,147 @@
             }
 
             scrapedAds.forEach(ad => {
-                const row = document.createElement('tr');
-
-                // Image
-                const imageHtml = ad.image || ad.imageUrl
-                    ? `<img src="${ad.image || ad.imageUrl}" alt="Ad" class="ad-thumbnail" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2260%22 height=%2260%22><rect fill=%22%23f0f0f0%22 width=%2260%22 height=%2260%22/><text x=%2230%22 y=%2235%22 text-anchor=%22middle%22 fill=%22%23999%22 font-size=%2210%22>No img</text></svg>'">`
-                    : '<span class="no-image">-</span>';
-
-                // Advertiser (use adFundedBy if available)
-                const advertiserName = ad.adFundedBy || ad.advertiser || 'Unknown';
-
-                // Title/Headline (check OCR extracted first)
-                const titleHeadline = ad.title || ad.headline || '-';
-
-                // Description/Snippet
-                const descSnippet = ad.description || ad.text || '-';
-
-                // Show badge if text was extracted via Claude vision
-                const visionBadge = ad.visionProcessed ? '<span class="vision-badge">AI</span>' : '';
-
-                // Visible link / destination URL
-                const visibleLink = ad.visibleLink || ad.displayUrl || ad.destinationUrl || '';
-                const visibleLinkHtml = visibleLink
-                    ? `<a href="${ad.destinationUrl || visibleLink}" target="_blank" rel="noopener" class="visible-link">${escapeHtml(truncateUrl(visibleLink, 35))}</a>`
-                    : '-';
-
-                // Details link
-                const detailsHtml = ad.detailsLink
-                    ? `<a href="${ad.detailsLink}" target="_blank" rel="noopener" class="btn btn-small">View</a>`
-                    : '-';
-
-                // Full extracted text tooltip
-                const textTooltip = ad.extractedText
-                    ? `title="${escapeHtml(ad.extractedText.substring(0, 500))}"`
-                    : '';
-
-                row.innerHTML = `
-                    <td>${imageHtml}</td>
-                    <td>
-                        <strong>${escapeHtml(advertiserName)}</strong>
-                        <div class="sub-info">${escapeHtml(ad.advertiserId || '')}</div>
-                    </td>
-                    <td class="text-cell" ${textTooltip}>${visionBadge}${escapeHtml(titleHeadline)}</td>
-                    <td class="text-cell">${escapeHtml(descSnippet)}</td>
-                    <td class="url-cell">${visibleLinkHtml}</td>
-                    <td><span class="badge badge-${(ad.format || 'unknown').toLowerCase()}">${ad.format || 'Unknown'}</span></td>
-                    <td class="date-cell">${ad.dateRange || '-'}</td>
-                    <td>${detailsHtml}</td>
-                `;
-
+                const row = createAdRow(ad);
                 resultsTableBody.appendChild(row);
             });
 
             resultsSection.style.display = 'block';
+        }
+
+        // Save/Load Functions (using IndexedDB for large storage)
+        function showSaveDialog() {
+            if (scrapedAds.length === 0) {
+                showError('No data to save');
+                return;
+            }
+            const domain = extractDomain(currentMeta.url || urlInput.value);
+            saveNameInput.value = `${domain} - ${new Date().toLocaleDateString()}`;
+            saveModal.style.display = 'flex';
+        }
+
+        async function saveResults() {
+            const name = saveNameInput.value.trim() || `Session ${new Date().toLocaleString()}`;
+
+            const session = {
+                id: Date.now(),
+                name: name,
+                url: currentMeta.url || urlInput.value,
+                adsCount: scrapedAds.length,
+                visionStats: currentMeta.visionStats,
+                savedAt: new Date().toISOString(),
+                ads: scrapedAds,
+                meta: currentMeta
+            };
+
+            try {
+                if (!db) await initDB();
+                await saveSessionToDB(session);
+                saveModal.style.display = 'none';
+                showNotification(`Saved "${name}" successfully!`);
+            } catch (e) {
+                showError('Failed to save: ' + e.message);
+            }
+        }
+
+        async function showSavedSessions() {
+            savedSessionsList.innerHTML = '<p class="no-saved">Loading...</p>';
+            savedSessionsSection.style.display = 'block';
+
+            try {
+                if (!db) await initDB();
+                const sessions = await getAllSessionsFromDB();
+
+                savedSessionsList.innerHTML = '';
+
+                if (sessions.length === 0) {
+                    savedSessionsList.innerHTML = '<p class="no-saved">No saved sessions found</p>';
+                } else {
+                    // Calculate total storage used
+                    let totalSize = 0;
+                    sessions.forEach(s => {
+                        totalSize += JSON.stringify(s).length;
+                    });
+                    const sizeMB = (totalSize / 1024 / 1024).toFixed(1);
+
+                    const storageInfo = document.createElement('div');
+                    storageInfo.className = 'storage-info';
+                    storageInfo.innerHTML = `<span>${sessions.length} sessions • ${sizeMB} MB used</span>`;
+                    savedSessionsList.appendChild(storageInfo);
+
+                    sessions.forEach(session => {
+                        const ocrCount = session.ads?.filter(a => a.visionProcessed).length || 0;
+                        const item = document.createElement('div');
+                        item.className = 'saved-session-item';
+                        item.innerHTML = `
+                            <div class="session-info">
+                                <strong>${escapeHtml(session.name)}</strong>
+                                <span class="session-meta">${session.adsCount} ads${ocrCount > 0 ? ` • ${ocrCount} OCR'd` : ''} • ${new Date(session.savedAt).toLocaleString()}</span>
+                            </div>
+                            <div class="session-actions">
+                                <button class="btn btn-small btn-primary" onclick="loadSession(${session.id})">Load</button>
+                                <button class="btn btn-small btn-danger" onclick="deleteSession(${session.id})">Delete</button>
+                            </div>
+                        `;
+                        savedSessionsList.appendChild(item);
+                    });
+                }
+            } catch (e) {
+                savedSessionsList.innerHTML = `<p class="no-saved">Error loading sessions: ${e.message}</p>`;
+            }
+        }
+
+        async function loadSession(id) {
+            try {
+                if (!db) await initDB();
+                const session = await getSessionFromDB(id);
+
+                if (session) {
+                    scrapedAds = session.ads;
+                    currentMeta = session.meta || {
+                        url: session.url,
+                        visionStats: session.visionStats,
+                        scrapedAt: session.savedAt
+                    };
+                    urlInput.value = session.url || '';
+                    displayResults();
+                    savedSessionsSection.style.display = 'none';
+                    showNotification(`Loaded "${session.name}"`);
+                }
+            } catch (e) {
+                showError('Failed to load session: ' + e.message);
+            }
+        }
+
+        async function deleteSession(id) {
+            if (!confirm('Delete this saved session?')) return;
+
+            try {
+                if (!db) await initDB();
+                await deleteSessionFromDB(id);
+                showSavedSessions();
+            } catch (e) {
+                showError('Failed to delete: ' + e.message);
+            }
+        }
+
+        function showNotification(message) {
+            const notif = document.createElement('div');
+            notif.className = 'notification';
+            notif.textContent = message;
+            document.body.appendChild(notif);
+            setTimeout(() => notif.remove(), 3000);
+        }
+
+        function extractDomain(url) {
+            try {
+                const match = url.match(/domain=([^&]+)/);
+                if (match) return match[1];
+                const advMatch = url.match(/advertiser\/(AR\d+)/);
+                if (advMatch) return `Advertiser ${advMatch[1].slice(0, 10)}...`;
+                return 'Unknown';
+            } catch {
+                return 'Unknown';
+            }
         }
 
         function exportToExcel() {
@@ -223,7 +892,6 @@
                 return;
             }
 
-            // Comprehensive Excel export with ALL fields including OCR
             const wsData = [
                 [
                     'Advertiser',
@@ -272,42 +940,25 @@
                     ad.lastShown || '',
                     ad.totalDaysShown || '',
                     ad.detailsLink || '',
-                    new Date().toLocaleString()
+                    currentMeta.scrapedAt || new Date().toISOString()
                 ]);
             });
 
             const ws = XLSX.utils.aoa_to_sheet(wsData);
-
-            // Set column widths
             ws['!cols'] = [
-                { wch: 25 }, // Advertiser
-                { wch: 25 }, // Ad Funded By
-                { wch: 25 }, // Advertiser ID
-                { wch: 25 }, // Creative ID
-                { wch: 40 }, // Title
-                { wch: 50 }, // Headline
-                { wch: 60 }, // Description/Snippet
-                { wch: 15 }, // CTA
-                { wch: 35 }, // Visible Link
-                { wch: 50 }, // Destination URL
-                { wch: 80 }, // OCR Extracted Text
-                { wch: 12 }, // OCR Processed
-                { wch: 10 }, // Format
-                { wch: 60 }, // Image URL
-                { wch: 60 }, // Video URL
-                { wch: 15 }, // Region
-                { wch: 12 }, // First Shown
-                { wch: 12 }, // Last Shown
-                { wch: 10 }, // Days Shown
-                { wch: 60 }, // Details Link
-                { wch: 20 }, // Scraped At
+                { wch: 25 }, { wch: 25 }, { wch: 25 }, { wch: 25 },
+                { wch: 40 }, { wch: 50 }, { wch: 60 }, { wch: 15 },
+                { wch: 35 }, { wch: 50 }, { wch: 80 }, { wch: 12 },
+                { wch: 10 }, { wch: 60 }, { wch: 60 }, { wch: 15 },
+                { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 60 }, { wch: 20 }
             ];
 
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'Scraped Ads');
 
-            const timestamp = new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-');
-            XLSX.writeFile(wb, `google-ads-full-${timestamp}.xlsx`);
+            const domain = extractDomain(currentMeta.url || urlInput.value);
+            const timestamp = new Date().toISOString().slice(0, 10);
+            XLSX.writeFile(wb, `ads-${domain}-${timestamp}.xlsx`);
         }
 
         function exportToJson() {
@@ -316,13 +967,19 @@
                 return;
             }
 
-            const dataStr = JSON.stringify(scrapedAds, null, 2);
+            const exportData = {
+                meta: currentMeta,
+                ads: scrapedAds
+            };
+
+            const dataStr = JSON.stringify(exportData, null, 2);
             const blob = new Blob([dataStr], { type: 'application/json' });
             const url = window.URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = url;
-            const timestamp = new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-');
-            link.download = `google-ads-${timestamp}.json`;
+            const domain = extractDomain(currentMeta.url || urlInput.value);
+            const timestamp = new Date().toISOString().slice(0, 10);
+            link.download = `ads-${domain}-${timestamp}.json`;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
@@ -331,6 +988,7 @@
 
         function clearResults() {
             scrapedAds = [];
+            currentMeta = {};
             resultsSection.style.display = 'none';
             urlInput.value = '';
         }
@@ -352,12 +1010,310 @@
             if (!url || url.length <= maxLength) return url;
             return url.substring(0, maxLength) + '...';
         }
+
+        // Make functions available globally for onclick handlers
+        window.loadSession = loadSession;
+        window.deleteSession = deleteSession;
+
+        // ===== BATCHED OCR PROCESSING =====
+        let ocrRunning = false;
+        let ocrAborted = false;
+        let retryCount = 0;
+        const MAX_RETRIES = 3;
+
+        document.getElementById('start-ocr-btn')?.addEventListener('click', startBatchedOcr);
+        document.getElementById('stop-ocr-btn')?.addEventListener('click', stopOcr);
+
+        function stopOcr() {
+            ocrAborted = true;
+            document.getElementById('ocr-status').textContent = 'Stopping...';
+        }
+
+        async function startBatchedOcr() {
+            if (ocrRunning || scrapedAds.length === 0) return;
+
+            ocrRunning = true;
+            ocrAborted = false;
+            retryCount = 0;
+
+            const startOcrBtn = document.getElementById('start-ocr-btn');
+            const stopOcrBtn = document.getElementById('stop-ocr-btn');
+            const ocrStatus = document.getElementById('ocr-status');
+            const ocrProgress = document.getElementById('ocr-progress');
+
+            startOcrBtn.style.display = 'none';
+            stopOcrBtn.style.display = 'inline-block';
+
+            // Get ads that need OCR (have image but no extracted text)
+            const adsWithImages = scrapedAds.filter(ad => ad.image || ad.imageUrl);
+            const adsNeedingOcr = adsWithImages.filter(ad => !ad.visionProcessed);
+            const alreadyProcessed = adsWithImages.length - adsNeedingOcr.length;
+
+            console.log(`OCR Status: ${adsWithImages.length} ads with images, ${alreadyProcessed} already processed, ${adsNeedingOcr.length} remaining`);
+
+            if (adsNeedingOcr.length === 0) {
+                ocrStatus.textContent = `All ${alreadyProcessed} ads with images already processed!`;
+                ocrRunning = false;
+                startOcrBtn.style.display = 'inline-block';
+                stopOcrBtn.style.display = 'none';
+                return;
+            }
+
+            ocrStatus.textContent = `Starting OCR for ${adsNeedingOcr.length} remaining ads...`;
+
+            const batchSize = 100; // Process 100 ads per API call (using fast Haiku model)
+            let processed = 0;
+            let successful = 0;
+            let failed = 0;
+            let errors = [];
+
+            // Show total including already processed
+            const totalWithImages = adsWithImages.length;
+            ocrProgress.textContent = `${alreadyProcessed}/${totalWithImages}`;
+
+            for (let i = 0; i < adsNeedingOcr.length && !ocrAborted; i += batchSize) {
+                const batch = adsNeedingOcr.slice(i, i + batchSize);
+                const batchData = batch.map(ad => ({
+                    id: ad.id,
+                    imageUrl: ad.image || ad.imageUrl
+                }));
+
+                const batchNum = Math.floor(i / batchSize) + 1;
+                const totalBatches = Math.ceil(adsNeedingOcr.length / batchSize);
+                ocrStatus.textContent = `Batch ${batchNum}/${totalBatches} (${batch.length} ads)...`;
+
+                try {
+                    console.log(`Sending batch ${batchNum} with ${batchData.length} ads`);
+
+                    const response = await fetch('/api/ocr-batch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ads: batchData })
+                    });
+
+                    console.log(`Response status: ${response.status}`);
+
+                    const contentType = response.headers.get('content-type');
+                    if (!contentType || !contentType.includes('application/json')) {
+                        const text = await response.text();
+                        console.error('Non-JSON response:', text.slice(0, 200));
+                        throw new Error(text.slice(0, 100) || 'Server error');
+                    }
+
+                    const data = await response.json();
+                    console.log(`Batch result: ${data.stats?.successful || 0} successful, ${data.stats?.failed || 0} failed`);
+
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+
+                    if (data.results) {
+                        // Apply OCR results to ads
+                        data.results.forEach(result => {
+                            const ad = scrapedAds.find(a => a.id === result.id);
+                            if (!ad) {
+                                console.warn(`Ad not found: ${result.id}`);
+                                return;
+                            }
+
+                            if (result.success && result.data) {
+                                if (result.data.headline && !ad.headline) ad.headline = result.data.headline;
+                                if (result.data.description && !ad.description) ad.description = result.data.description;
+                                if (result.data.callToAction && !ad.callToAction) ad.callToAction = result.data.callToAction;
+                                if (result.data.visibleUrl && !ad.visibleLink) ad.visibleLink = result.data.visibleUrl;
+                                if (result.data.brandName) ad.brandName = result.data.brandName;
+                                if (result.data.allText) ad.extractedText = result.data.allText;
+                                ad.visionProcessed = true;
+                                successful++;
+                            } else {
+                                ad.visionProcessed = true; // Mark as processed even if failed
+                                ad.visionError = result.error || 'Unknown error';
+                                failed++;
+                                if (errors.length < 5) errors.push(result.error);
+                            }
+                        });
+                    }
+
+                    processed += batch.length;
+                    retryCount = 0; // Reset retry count on success
+
+                    // Update progress to show total (already processed + newly processed)
+                    const totalProcessed = alreadyProcessed + processed;
+                    ocrProgress.textContent = `${totalProcessed}/${totalWithImages}`;
+
+                    // Update vision stats
+                    currentMeta.visionStats = {
+                        successful: alreadyProcessed + successful,
+                        attempted: alreadyProcessed + processed,
+                        failed
+                    };
+
+                    // Refresh display periodically (not every batch to avoid flicker)
+                    if (batchNum % 3 === 0 || i + batchSize >= adsNeedingOcr.length) {
+                        displayResults();
+                    }
+
+                } catch (error) {
+                    console.error('Batch OCR error:', error);
+                    retryCount++;
+
+                    if (retryCount >= MAX_RETRIES) {
+                        ocrStatus.textContent = `Failed after ${MAX_RETRIES} retries: ${error.message}. Skipping batch.`;
+                        processed += batch.length;
+                        failed += batch.length;
+                        retryCount = 0;
+                        await new Promise(r => setTimeout(r, 2000));
+                    } else {
+                        ocrStatus.textContent = `Error: ${error.message}. Retry ${retryCount}/${MAX_RETRIES} in 5s...`;
+                        await new Promise(r => setTimeout(r, 5000));
+                        i -= batchSize; // Retry this batch
+                    }
+                }
+            }
+
+            ocrRunning = false;
+            startOcrBtn.style.display = 'inline-block';
+            stopOcrBtn.style.display = 'none';
+
+            // Final display refresh
+            displayResults();
+
+            const totalProcessed = alreadyProcessed + processed;
+            if (ocrAborted) {
+                ocrStatus.textContent = `Stopped. ${totalProcessed}/${totalWithImages} processed (${successful} new)`;
+            } else {
+                ocrStatus.textContent = `Done! ${totalProcessed}/${totalWithImages} processed. ${failed > 0 ? `${failed} failed.` : ''}`;
+                if (errors.length > 0) {
+                    console.log('Sample errors:', errors);
+                }
+            }
+
+            ocrAborted = false;
+        }
     </script>
 
     <style>
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
+        }
+
+        /* Progress Section Styles */
+        .progress-info {
+            padding: 10px 0;
+        }
+
+        .progress-info h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .progress-bar {
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 15px;
+        }
+
+        #progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        .progress-details {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .progress-stats {
+            font-size: 14px;
+            color: #333;
+            font-weight: 500;
+        }
+
+        .progress-numbers {
+            display: flex;
+            gap: 8px;
+            font-size: 13px;
+            color: #666;
+        }
+
+        .progress-numbers .separator {
+            color: #ccc;
+        }
+
+        #ads-count {
+            font-weight: 600;
+            color: #667eea;
+        }
+
+        #eta {
+            color: #888;
+        }
+
+        .progress-phases {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+
+        .phase {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            color: #999;
+            transition: all 0.3s ease;
+        }
+
+        .phase.active {
+            color: #667eea;
+            font-weight: 500;
+        }
+
+        .phase.active .phase-icon {
+            animation: pulse 1s infinite;
+        }
+
+        .phase.completed {
+            color: #28a745;
+        }
+
+        .phase.completed .phase-icon {
+            color: #28a745;
+        }
+
+        .phase-icon {
+            width: 16px;
+            text-align: center;
+            font-size: 10px;
+        }
+
+        footer {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            font-size: 14px;
+        }
+
+        footer a {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        footer a:hover {
+            text-decoration: underline;
         }
 
         .example-urls {
@@ -375,6 +1331,11 @@
             background: #e9ecef;
             border-radius: 4px;
             word-break: break-all;
+            cursor: pointer;
+        }
+
+        .example-urls code:hover {
+            background: #dee2e6;
         }
 
         .error-section {
@@ -408,14 +1369,33 @@
 
         .vision-badge {
             display: inline-block;
-            padding: 2px 5px;
-            font-size: 9px;
+            padding: 2px 6px;
+            font-size: 10px;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border-radius: 3px;
             margin-right: 4px;
             font-weight: 600;
             vertical-align: middle;
+        }
+
+        .vision-stats {
+            font-weight: normal;
+            margin-left: 10px;
+        }
+
+        .results-meta {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 15px;
+            font-size: 13px;
+            color: #666;
+        }
+
+        .meta-item {
+            background: #f8f9fa;
+            padding: 4px 10px;
+            border-radius: 4px;
         }
 
         .ad-thumbnail {
@@ -455,7 +1435,7 @@
             max-width: 150px;
         }
 
-        .dest-url, .visible-link {
+        .visible-link {
             font-size: 12px;
             color: #1976d2;
             word-break: break-all;
@@ -486,6 +1466,19 @@
             opacity: 0.9;
         }
 
+        .btn-small.btn-secondary {
+            background: #6c757d;
+        }
+
+        .btn-small.btn-danger {
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%);
+        }
+
+        .btn-warning {
+            background: linear-gradient(135deg, #ffc107 0%, #ff9800 100%);
+            color: #333;
+        }
+
         #results-table {
             font-size: 13px;
         }
@@ -506,6 +1499,227 @@
             display: flex;
             gap: 10px;
             flex-wrap: wrap;
+        }
+
+        /* Saved Sessions */
+        .saved-sessions-section {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+
+        .saved-sessions-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .saved-sessions-header h3 {
+            margin: 0;
+        }
+
+        .saved-session-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            margin-bottom: 8px;
+        }
+
+        .saved-session-item:hover {
+            background: #f8f9fa;
+        }
+
+        .session-info strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .session-meta {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .session-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .no-saved {
+            color: #666;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .storage-info {
+            background: #e3f2fd;
+            padding: 8px 12px;
+            border-radius: 6px;
+            margin-bottom: 12px;
+            font-size: 13px;
+            color: #1565c0;
+        }
+
+        /* Scraper selection */
+        .scraper-options {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 10px 0;
+        }
+
+        .scraper-options label {
+            font-weight: 600;
+            color: #333;
+        }
+
+        #scraper-select {
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            background: white;
+            cursor: pointer;
+            flex: 1;
+            max-width: 300px;
+        }
+
+        #scraper-select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        /* Modal */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 400px;
+        }
+
+        .modal-content h3 {
+            margin-top: 0;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+
+        /* Notification */
+        .notification {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 25px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+            animation: slideIn 0.3s ease;
+            z-index: 1001;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        /* OCR Controls */
+        .ocr-controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 15px;
+            background: linear-gradient(135deg, #e8f5e9 0%, #e3f2fd 100%);
+            border-radius: 8px;
+            border: 1px solid #c8e6c9;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+
+        .ocr-label {
+            font-weight: 600;
+            color: #333;
+        }
+
+        #ocr-status {
+            font-size: 13px;
+            color: #666;
+        }
+
+        #ocr-progress {
+            font-weight: 600;
+            color: #667eea;
+        }
+
+        #ocr-progress-display {
+            font-size: 13px;
+            color: #555;
+            background: white;
+            padding: 4px 10px;
+            border-radius: 4px;
+        }
+
+        /* Scraping indicator */
+        .scraping-indicator {
+            font-size: 16px;
+            font-weight: 500;
+            animation: pulse 2s infinite;
+        }
+
+        .loading-more-row td {
+            border-top: 2px dashed #667eea !important;
         }
     </style>
 </body>
