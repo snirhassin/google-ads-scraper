@@ -30,7 +30,11 @@
                             <option value="serpapi">SerpAPI (faster for large advertisers)</option>
                         </select>
                         <label for="max-results">Max Ads:</label>
-                        <input type="number" id="max-results" value="100" min="1" max="10000" style="width: 80px; padding: 8px; border: 2px solid #e0e0e0; border-radius: 6px; font-size: 14px;">
+                        <select id="max-results" style="padding: 8px 12px; border: 2px solid #e0e0e0; border-radius: 6px; font-size: 14px; background: white; cursor: pointer;">
+                            <option value="100" selected>100 ads</option>
+                            <option value="1000">1,000 ads</option>
+                            <option value="10000">All ads</option>
+                        </select>
                     </div>
                     <div class="button-group">
                         <button id="start-btn" class="btn btn-primary">Start Scraping</button>
@@ -435,10 +439,14 @@
                 // Stop progress updates
                 clearInterval(progressInterval);
 
-                // Mark fetch phase as complete
+                // Mark both phases as complete
                 const fetchPhase = document.getElementById('phase-fetch');
                 fetchPhase.className = 'phase completed';
                 fetchPhase.querySelector('.phase-icon').textContent = '✓';
+
+                const ocrPhase = document.getElementById('phase-ocr');
+                ocrPhase.className = 'phase completed';
+                ocrPhase.querySelector('.phase-icon').textContent = '✓';
 
                 document.getElementById('ads-count').textContent = `${scrapedAds.length} ads`;
 
@@ -446,27 +454,12 @@
                     url: url,
                     total: scrapedAds.length,
                     scraper: scraperType,
-                    visionEnabled: false,
-                    visionStats: null,
+                    visionEnabled: currentMeta.visionEnabled || false,
+                    visionStats: currentMeta.visionStats || null,
                     scrapedAt: new Date().toISOString()
                 };
 
                 displayResults();
-
-                // Auto-run OCR as part of the same pipeline
-                const adsWithImages = scrapedAds.filter(a => a.image || a.imageUrl).length;
-                if (adsWithImages > 0 && !scrapeAborted) {
-                    statusSpan.textContent = `Extracting text from ${adsWithImages} ads...`;
-                    const ocrPhase = document.getElementById('phase-ocr');
-                    ocrPhase.className = 'phase active';
-                    ocrPhase.querySelector('.phase-icon').textContent = '●';
-
-                    await runAutoOcr();
-
-                    ocrPhase.className = 'phase completed';
-                    ocrPhase.querySelector('.phase-icon').textContent = '✓';
-                    displayResults();
-                }
 
                 // All done
                 clearInterval(progressInterval);
@@ -557,7 +550,7 @@
             }
         }
 
-        // Apify scraper (async with polling + live preview)
+        // Apify scraper (async with polling + parallel OCR pipeline)
         async function scrapeWithApify(url) {
             const maxResults = parseInt(document.getElementById('max-results').value) || 100;
             statusSpan.textContent = `[Apify] Starting scraper (max ${maxResults} ads)...`;
@@ -586,95 +579,197 @@
             console.log('Apify run started:', runId);
             statusSpan.textContent = '[Apify] Scraping in progress...';
 
-            // Show results section early with "Scraping..." indicator
+            // Show results section early
             resultsSection.style.display = 'block';
             totalCount.textContent = '0';
-            resultsTableBody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #667eea; padding: 40px;"><div class="scraping-indicator">⏳ Scraping in progress... Ads will appear here as they are collected.</div></td></tr>';
+            resultsTableBody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #667eea; padding: 40px;"><div class="scraping-indicator">Scraping in progress... Ads will appear here as they are collected.</div></td></tr>';
 
-            // Poll for results
+            // Parallel pipeline state
+            let lastFetchedOffset = 0;
+            const BATCH_SIZE = 100;
+            let pendingOcrPromises = [];
+            let ocrProcessedIds = new Set();
+            let ocrSuccessful = 0;
+            let ocrFailed = 0;
+            let ocrAttempted = 0;
+            let runFinished = false;
+
+            // OCR helper: fire OCR for a batch of ads (returns a Promise)
+            function fireOcrBatch(adsBatch) {
+                const batchData = adsBatch.map(ad => ({ id: ad.id, imageUrl: ad.image || ad.imageUrl }));
+                adsBatch.forEach(ad => ocrProcessedIds.add(ad.id));
+                ocrAttempted += adsBatch.length;
+
+                return fetch('/api/ocr-batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ads: batchData })
+                }).then(async (response) => {
+                    const contentType = response.headers.get('content-type');
+                    if (!contentType || !contentType.includes('application/json')) {
+                        throw new Error('Server error during OCR');
+                    }
+                    const data = await response.json();
+                    if (data.error) throw new Error(data.error);
+
+                    if (data.results) {
+                        data.results.forEach(result => {
+                            const ad = scrapedAds.find(a => a.id === result.id);
+                            if (!ad) return;
+                            if (result.success && result.data) {
+                                if (result.data.headline && !ad.headline) ad.headline = result.data.headline;
+                                if (result.data.description && !ad.description) ad.description = result.data.description;
+                                if (result.data.callToAction && !ad.callToAction) ad.callToAction = result.data.callToAction;
+                                if (result.data.visibleUrl && !ad.visibleLink) ad.visibleLink = result.data.visibleUrl;
+                                if (result.data.brandName) ad.brandName = result.data.brandName;
+                                if (result.data.allText) ad.extractedText = result.data.allText;
+                                ad.visionProcessed = true;
+                                ocrSuccessful++;
+                            } else {
+                                ad.visionProcessed = true;
+                                ad.visionError = result.error || 'Unknown error';
+                                ocrFailed++;
+                            }
+                        });
+                    }
+                    // Update display after OCR batch completes
+                    updatePipelineStatus();
+                    displayPartialResults(scrapedAds, scrapedAds.length, !runFinished);
+                }).catch(err => {
+                    console.error('OCR batch error:', err);
+                    ocrFailed += adsBatch.length;
+                });
+            }
+
+            // Update the status line for parallel pipeline
+            function updatePipelineStatus() {
+                const ocrTotal = ocrAttempted;
+                const ocrDone = ocrSuccessful + ocrFailed;
+                if (ocrTotal > 0) {
+                    statusSpan.textContent = `Fetched: ${scrapedAds.length} ads | OCR: ${ocrDone}/${ocrTotal} processed`;
+                } else {
+                    statusSpan.textContent = `Fetched: ${scrapedAds.length} ads`;
+                }
+                document.getElementById('ads-count').textContent = `${scrapedAds.length} ads`;
+                totalCount.textContent = scrapedAds.length;
+            }
+
+            // Poll loop
             let attempts = 0;
             const maxAttempts = 720;  // 60 minutes max (5s intervals)
-            let lastAdsCount = 0;
-            let lastPreviewUpdate = 0;
 
             while (attempts < maxAttempts && !scrapeAborted) {
-                await new Promise(r => setTimeout(r, 5000));  // Wait 5 seconds
+                await new Promise(r => setTimeout(r, 5000));
                 if (scrapeAborted) break;
                 attempts++;
 
-                const elapsedMin = Math.floor((attempts * 5) / 60);
-                const elapsedSec = (attempts * 5) % 60;
-                const elapsedStr = elapsedMin > 0 ? `${elapsedMin}m ${elapsedSec}s` : `${elapsedSec}s`;
-
                 try {
+                    // Fetch new ads incrementally from the offset
                     const pollResponse = await fetch('/api/scrape-apify', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ runId, includePartialResults: true })
+                        body: JSON.stringify({
+                            runId,
+                            includePartialResults: true,
+                            offset: lastFetchedOffset,
+                            limit: BATCH_SIZE
+                        })
                     });
 
                     const pollData = await pollResponse.json();
+                    const totalInDataset = pollData.total || pollData.stats?.itemsScraped || 0;
 
-                    // Update ads count from stats
-                    const currentAdsCount = pollData.stats?.itemsScraped || pollData.stats?.itemCount || pollData.total || 0;
+                    // Add new ads from this batch
+                    if (pollData.partialAds && pollData.partialAds.length > 0) {
+                        scrapedAds = scrapedAds.concat(pollData.partialAds);
+                        lastFetchedOffset += pollData.partialAds.length;
+
+                        // Fire OCR for new ads that have images
+                        const newAdsWithImages = pollData.partialAds.filter(
+                            ad => (ad.image || ad.imageUrl) && !ocrProcessedIds.has(ad.id)
+                        );
+                        if (newAdsWithImages.length > 0 && !scrapeAborted) {
+                            pendingOcrPromises.push(fireOcrBatch(newAdsWithImages));
+                        }
+
+                        updatePipelineStatus();
+                        displayPartialResults(scrapedAds, totalInDataset || scrapedAds.length, true);
+                    } else if (totalInDataset > lastFetchedOffset) {
+                        // There are more items but this fetch returned empty - dataset may be lagging
+                        // Will retry on next poll
+                    }
 
                     if (pollData.status === 'RUNNING' || pollData.status === 'READY') {
-                        // Still running - show progress
-                        statusSpan.textContent = `[Apify] Scraping... (${elapsedStr})`;
-
-                        // Get total from response (dataset itemCount is most accurate)
-                        const totalFromDataset = pollData.total || currentAdsCount;
-
-                        if (totalFromDataset > 0) {
-                            document.getElementById('ads-count').textContent = `${totalFromDataset} ads`;
-                            totalCount.textContent = totalFromDataset;
-                        } else if (pollData.stats?.runTimeSecs) {
-                            document.getElementById('ads-count').textContent = `Running ${Math.round(pollData.stats.runTimeSecs)}s...`;
-                        }
-
-                        // Show partial results preview (update every 15 seconds if count changed)
-                        if (pollData.partialAds && pollData.partialAds.length > 0 &&
-                            (totalFromDataset > lastAdsCount || Date.now() - lastPreviewUpdate > 15000)) {
-                            scrapedAds = pollData.partialAds;
-                            lastAdsCount = totalFromDataset;
-                            lastPreviewUpdate = Date.now();
-
-                            // Update preview with first 50 ads + "more loading" message
-                            displayPartialResults(scrapedAds, totalFromDataset, true);
-                        }
-
                         // Auto-stop if we reached the target
-                        if (totalFromDataset >= maxResults) {
-                            console.log(`Reached target of ${maxResults} ads (got ${totalFromDataset}), stopping...`);
-                            statusSpan.textContent = `[Apify] Reached ${maxResults} ads target! Fetching final results...`;
-                            // Fetch all results from dataset
-                            const finalPoll = await fetch('/api/scrape-apify', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ runId, includePartialResults: true })
-                            });
-                            const finalData = await finalPoll.json();
-                            if (finalData.partialAds && finalData.partialAds.length > 0) {
-                                scrapedAds = finalData.partialAds;
-                            }
-                            document.getElementById('ads-count').textContent = `${scrapedAds.length} ads`;
-                            totalCount.textContent = scrapedAds.length;
-                            return;
-                        }
+                        if (totalInDataset >= maxResults || scrapedAds.length >= maxResults) {
+                            console.log(`Reached target of ${maxResults} ads, fetching remaining...`);
+                            // Fetch any remaining ads we haven't fetched yet
+                            while (lastFetchedOffset < Math.min(totalInDataset, maxResults)) {
+                                const moreResponse = await fetch('/api/scrape-apify', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        runId,
+                                        includePartialResults: true,
+                                        offset: lastFetchedOffset,
+                                        limit: BATCH_SIZE
+                                    })
+                                });
+                                const moreData = await moreResponse.json();
+                                if (moreData.partialAds && moreData.partialAds.length > 0) {
+                                    scrapedAds = scrapedAds.concat(moreData.partialAds);
+                                    lastFetchedOffset += moreData.partialAds.length;
 
+                                    const newWithImages = moreData.partialAds.filter(
+                                        ad => (ad.image || ad.imageUrl) && !ocrProcessedIds.has(ad.id)
+                                    );
+                                    if (newWithImages.length > 0) {
+                                        pendingOcrPromises.push(fireOcrBatch(newWithImages));
+                                    }
+                                } else {
+                                    break;
+                                }
+                            }
+                            runFinished = true;
+                            break;
+                        }
                         continue;
                     }
 
                     if (pollData.status === 'SUCCEEDED' || pollData.status === 'TIMED-OUT') {
-                        // Got results
-                        scrapedAds = pollData.ads || [];
-                        document.getElementById('ads-count').textContent = `${scrapedAds.length} ads`;
-                        totalCount.textContent = scrapedAds.length;
+                        // Run finished - fetch all remaining ads
+                        while (lastFetchedOffset < totalInDataset) {
+                            const finalResponse = await fetch('/api/scrape-apify', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    runId,
+                                    includePartialResults: true,
+                                    offset: lastFetchedOffset,
+                                    limit: BATCH_SIZE
+                                })
+                            });
+                            const finalData = await finalResponse.json();
+                            if (finalData.partialAds && finalData.partialAds.length > 0) {
+                                scrapedAds = scrapedAds.concat(finalData.partialAds);
+                                lastFetchedOffset += finalData.partialAds.length;
+
+                                const newWithImages = finalData.partialAds.filter(
+                                    ad => (ad.image || ad.imageUrl) && !ocrProcessedIds.has(ad.id)
+                                );
+                                if (newWithImages.length > 0) {
+                                    pendingOcrPromises.push(fireOcrBatch(newWithImages));
+                                }
+                            } else {
+                                break;
+                            }
+                        }
 
                         if (pollData.status === 'TIMED-OUT' && scrapedAds.length > 0) {
                             console.warn('Apify run timed out but got partial results:', scrapedAds.length);
                         }
-                        return;
+                        runFinished = true;
+                        break;
                     }
 
                     // Failed
@@ -682,12 +777,21 @@
 
                 } catch (pollError) {
                     console.error('Poll error:', pollError);
-                    // Continue polling on network errors
                     if (attempts >= maxAttempts) throw pollError;
                 }
             }
 
-            // If aborted, use whatever partial results we have
+            // Wait for all pending OCR promises to finish
+            if (pendingOcrPromises.length > 0) {
+                statusSpan.textContent = `Waiting for ${pendingOcrPromises.length} OCR batches to finish...`;
+                await Promise.allSettled(pendingOcrPromises);
+            }
+
+            // Update vision stats
+            currentMeta.visionStats = { successful: ocrSuccessful, attempted: ocrAttempted, failed: ocrFailed };
+            currentMeta.visionEnabled = ocrAttempted > 0;
+
+            // If aborted, use whatever we have
             if (scrapeAborted && scrapedAds.length > 0) {
                 document.getElementById('ads-count').textContent = `${scrapedAds.length} ads (stopped)`;
                 totalCount.textContent = scrapedAds.length;
@@ -695,7 +799,11 @@
                 return;
             }
 
-            throw new Error('Apify scraping timed out after 60 minutes');
+            if (scrapedAds.length === 0 && !scrapeAborted) {
+                throw new Error('Apify scraping timed out after 60 minutes');
+            }
+
+            updatePipelineStatus();
         }
 
         // Display partial results during scraping
@@ -1080,77 +1188,6 @@
         // Make functions available globally for onclick handlers
         window.loadSession = loadSession;
         window.deleteSession = deleteSession;
-
-        // ===== AUTO OCR (runs as part of scraping pipeline) =====
-        async function runAutoOcr() {
-            const adsWithImages = scrapedAds.filter(ad => ad.image || ad.imageUrl);
-            const adsNeedingOcr = adsWithImages.filter(ad => !ad.visionProcessed);
-            if (adsNeedingOcr.length === 0) return;
-
-            const batchSize = 100;
-            let processed = 0;
-            let successful = 0;
-            let failed = 0;
-
-            for (let i = 0; i < adsNeedingOcr.length && !scrapeAborted; i += batchSize) {
-                const batch = adsNeedingOcr.slice(i, i + batchSize);
-                const batchNum = Math.floor(i / batchSize) + 1;
-                const totalBatches = Math.ceil(adsNeedingOcr.length / batchSize);
-
-                statusSpan.textContent = `Extracting text: batch ${batchNum}/${totalBatches} (${batch.length} ads)...`;
-                document.getElementById('ads-count').textContent = `${processed}/${adsNeedingOcr.length} OCR'd`;
-
-                try {
-                    const batchData = batch.map(ad => ({ id: ad.id, imageUrl: ad.image || ad.imageUrl }));
-                    const response = await fetch('/api/ocr-batch', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ ads: batchData })
-                    });
-
-                    const contentType = response.headers.get('content-type');
-                    if (!contentType || !contentType.includes('application/json')) {
-                        throw new Error('Server error during OCR');
-                    }
-
-                    const data = await response.json();
-                    if (data.error) throw new Error(data.error);
-
-                    if (data.results) {
-                        data.results.forEach(result => {
-                            const ad = scrapedAds.find(a => a.id === result.id);
-                            if (!ad) return;
-                            if (result.success && result.data) {
-                                if (result.data.headline && !ad.headline) ad.headline = result.data.headline;
-                                if (result.data.description && !ad.description) ad.description = result.data.description;
-                                if (result.data.callToAction && !ad.callToAction) ad.callToAction = result.data.callToAction;
-                                if (result.data.visibleUrl && !ad.visibleLink) ad.visibleLink = result.data.visibleUrl;
-                                if (result.data.brandName) ad.brandName = result.data.brandName;
-                                if (result.data.allText) ad.extractedText = result.data.allText;
-                                ad.visionProcessed = true;
-                                successful++;
-                            } else {
-                                ad.visionProcessed = true;
-                                failed++;
-                            }
-                        });
-                    }
-
-                    processed += batch.length;
-                    document.getElementById('ads-count').textContent = `${processed}/${adsNeedingOcr.length} OCR'd`;
-
-                    currentMeta.visionStats = { successful, attempted: processed, failed };
-                    currentMeta.visionEnabled = true;
-
-                } catch (error) {
-                    console.error('Auto OCR batch error:', error);
-                    processed += batch.length;
-                    failed += batch.length;
-                }
-            }
-
-            document.getElementById('ads-count').textContent = `${scrapedAds.length} ads`;
-        }
 
         // ===== BATCHED OCR PROCESSING (manual re-run) =====
         let ocrRunning = false;

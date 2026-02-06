@@ -26,7 +26,9 @@ module.exports = async function handler(req, res) {
   const runId = req.body?.runId;
   if (runId) {
     const includePartialResults = req.body?.includePartialResults || false;
-    return await pollRunStatus(client, runId, res, includePartialResults);
+    const offset = req.body?.offset || 0;
+    const limit = req.body?.limit || 200;
+    return await pollRunStatus(client, runId, res, includePartialResults, offset, limit);
   }
 
   // Get URL from query params (GET) or body (POST)
@@ -81,7 +83,7 @@ module.exports = async function handler(req, res) {
 };
 
 // Poll for run status and get results when complete
-async function pollRunStatus(client, runId, res, includePartialResults = false) {
+async function pollRunStatus(client, runId, res, includePartialResults = false, offset = 0, limit = 200) {
   try {
     const run = await client.run(runId).get();
 
@@ -116,12 +118,12 @@ async function pollRunStatus(client, runId, res, includePartialResults = false) 
 
           console.log(`Dataset has ${totalItems} items`);
 
-          // Fetch items for preview (limit 200 to keep response manageable)
+          // Fetch items incrementally using offset/limit
           if (totalItems > 0) {
-            const { items } = await client.dataset(run.defaultDatasetId).listItems({ limit: 200 });
+            const { items } = await client.dataset(run.defaultDatasetId).listItems({ offset, limit });
             if (items && items.length > 0) {
               response.partialAds = items.map(item => transformApifyAd(item));
-              console.log(`Returning ${response.partialAds.length} partial results (total: ${totalItems})`);
+              console.log(`Returning ${response.partialAds.length} partial results (offset: ${offset}, total: ${totalItems})`);
             }
           }
         } catch (partialError) {
