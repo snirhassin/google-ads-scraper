@@ -77,15 +77,11 @@
                     <div class="progress-phases" id="progress-phases">
                         <div class="phase active" id="phase-fetch">
                             <span class="phase-icon">●</span>
-                            <span class="phase-text">Fetching ads...</span>
-                        </div>
-                        <div class="phase" id="phase-details">
-                            <span class="phase-icon">○</span>
-                            <span class="phase-text">Loading ad details (100 ads)</span>
+                            <span class="phase-text">Fetching ads</span>
                         </div>
                         <div class="phase" id="phase-ocr">
                             <span class="phase-icon">○</span>
-                            <span class="phase-text">AI text extraction (after scraping)</span>
+                            <span class="phase-text">Extracting ad text (AI)</span>
                         </div>
                     </div>
                 </div>
@@ -101,9 +97,9 @@
                         <button id="clear-results-btn" class="btn btn-secondary">Clear</button>
                     </div>
                 </div>
-                <div class="ocr-controls" id="ocr-controls">
+                <div class="ocr-controls" id="ocr-controls" style="display: none;">
                     <span class="ocr-label">AI Text Extraction:</span>
-                    <button id="start-ocr-btn" class="btn btn-primary">Start OCR for All Ads</button>
+                    <button id="start-ocr-btn" class="btn btn-primary">Re-run OCR</button>
                     <button id="stop-ocr-btn" class="btn btn-secondary" style="display: none;">Stop OCR</button>
                     <span id="ocr-progress-display"><span id="ocr-progress">0/0</span> processed</span>
                     <span id="ocr-status"></span>
@@ -316,9 +312,8 @@
         let estimatedAds = 0;
 
         const phases = [
-            { id: 'phase-fetch', text: 'Fetching ads from SerpAPI (up to 5000)', duration: 60, adsPercent: 60 },
-            { id: 'phase-details', text: 'Loading ad details (100 ads)', duration: 60, adsPercent: 80 },
-            { id: 'phase-ocr', text: 'AI text extraction (100 images)', duration: 120, adsPercent: 100 }
+            { id: 'phase-fetch', text: 'Fetching ads', duration: 120, adsPercent: 60 },
+            { id: 'phase-ocr', text: 'Extracting ad text (AI)', duration: 120, adsPercent: 100 }
         ];
         const totalEstimatedTime = phases.reduce((sum, p) => sum + p.duration, 0);
 
@@ -440,15 +435,12 @@
                 // Stop progress updates
                 clearInterval(progressInterval);
 
-                // Show completion
-                document.getElementById('progress-fill').style.width = '100%';
-                document.getElementById('ads-count').textContent = `${scrapedAds.length} ads`;
-                statusSpan.textContent = 'Ads fetched! Click "Start OCR" to extract text.';
-
                 // Mark fetch phase as complete
                 const fetchPhase = document.getElementById('phase-fetch');
                 fetchPhase.className = 'phase completed';
                 fetchPhase.querySelector('.phase-icon').textContent = '✓';
+
+                document.getElementById('ads-count').textContent = `${scrapedAds.length} ads`;
 
                 currentMeta = {
                     url: url,
@@ -460,6 +452,31 @@
                 };
 
                 displayResults();
+
+                // Auto-run OCR as part of the same pipeline
+                const adsWithImages = scrapedAds.filter(a => a.image || a.imageUrl).length;
+                if (adsWithImages > 0 && !scrapeAborted) {
+                    statusSpan.textContent = `Extracting text from ${adsWithImages} ads...`;
+                    const ocrPhase = document.getElementById('phase-ocr');
+                    ocrPhase.className = 'phase active';
+                    ocrPhase.querySelector('.phase-icon').textContent = '●';
+
+                    await runAutoOcr();
+
+                    ocrPhase.className = 'phase completed';
+                    ocrPhase.querySelector('.phase-icon').textContent = '✓';
+                    displayResults();
+                }
+
+                // All done
+                clearInterval(progressInterval);
+                document.getElementById('progress-fill').style.width = '100%';
+
+                const ocrCount = scrapedAds.filter(a => a.visionProcessed).length;
+                statusSpan.textContent = ocrCount > 0
+                    ? `Done! ${scrapedAds.length} ads scraped, ${ocrCount} text extracted.`
+                    : `Done! ${scrapedAds.length} ads scraped.`;
+                document.getElementById('ads-count').textContent = `${scrapedAds.length} ads`;
 
             } catch (error) {
                 clearInterval(progressInterval);
@@ -765,12 +782,16 @@
                 visionStats.innerHTML = '';
             }
 
-            // Update OCR controls
+            // Update OCR controls - only show if some ads weren't processed
             const adsWithImages = scrapedAds.filter(ad => ad.image || ad.imageUrl).length;
             const adsProcessed = scrapedAds.filter(ad => ad.visionProcessed).length;
             const ocrProgress = document.getElementById('ocr-progress');
             if (ocrProgress) {
                 ocrProgress.textContent = `${adsProcessed}/${adsWithImages}`;
+            }
+            const ocrControls = document.getElementById('ocr-controls');
+            if (ocrControls) {
+                ocrControls.style.display = (adsWithImages > 0 && adsProcessed < adsWithImages) ? 'flex' : 'none';
             }
 
             // Show metadata
@@ -1060,7 +1081,78 @@
         window.loadSession = loadSession;
         window.deleteSession = deleteSession;
 
-        // ===== BATCHED OCR PROCESSING =====
+        // ===== AUTO OCR (runs as part of scraping pipeline) =====
+        async function runAutoOcr() {
+            const adsWithImages = scrapedAds.filter(ad => ad.image || ad.imageUrl);
+            const adsNeedingOcr = adsWithImages.filter(ad => !ad.visionProcessed);
+            if (adsNeedingOcr.length === 0) return;
+
+            const batchSize = 100;
+            let processed = 0;
+            let successful = 0;
+            let failed = 0;
+
+            for (let i = 0; i < adsNeedingOcr.length && !scrapeAborted; i += batchSize) {
+                const batch = adsNeedingOcr.slice(i, i + batchSize);
+                const batchNum = Math.floor(i / batchSize) + 1;
+                const totalBatches = Math.ceil(adsNeedingOcr.length / batchSize);
+
+                statusSpan.textContent = `Extracting text: batch ${batchNum}/${totalBatches} (${batch.length} ads)...`;
+                document.getElementById('ads-count').textContent = `${processed}/${adsNeedingOcr.length} OCR'd`;
+
+                try {
+                    const batchData = batch.map(ad => ({ id: ad.id, imageUrl: ad.image || ad.imageUrl }));
+                    const response = await fetch('/api/ocr-batch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ads: batchData })
+                    });
+
+                    const contentType = response.headers.get('content-type');
+                    if (!contentType || !contentType.includes('application/json')) {
+                        throw new Error('Server error during OCR');
+                    }
+
+                    const data = await response.json();
+                    if (data.error) throw new Error(data.error);
+
+                    if (data.results) {
+                        data.results.forEach(result => {
+                            const ad = scrapedAds.find(a => a.id === result.id);
+                            if (!ad) return;
+                            if (result.success && result.data) {
+                                if (result.data.headline && !ad.headline) ad.headline = result.data.headline;
+                                if (result.data.description && !ad.description) ad.description = result.data.description;
+                                if (result.data.callToAction && !ad.callToAction) ad.callToAction = result.data.callToAction;
+                                if (result.data.visibleUrl && !ad.visibleLink) ad.visibleLink = result.data.visibleUrl;
+                                if (result.data.brandName) ad.brandName = result.data.brandName;
+                                if (result.data.allText) ad.extractedText = result.data.allText;
+                                ad.visionProcessed = true;
+                                successful++;
+                            } else {
+                                ad.visionProcessed = true;
+                                failed++;
+                            }
+                        });
+                    }
+
+                    processed += batch.length;
+                    document.getElementById('ads-count').textContent = `${processed}/${adsNeedingOcr.length} OCR'd`;
+
+                    currentMeta.visionStats = { successful, attempted: processed, failed };
+                    currentMeta.visionEnabled = true;
+
+                } catch (error) {
+                    console.error('Auto OCR batch error:', error);
+                    processed += batch.length;
+                    failed += batch.length;
+                }
+            }
+
+            document.getElementById('ads-count').textContent = `${scrapedAds.length} ads`;
+        }
+
+        // ===== BATCHED OCR PROCESSING (manual re-run) =====
         let ocrRunning = false;
         let ocrAborted = false;
         let retryCount = 0;
