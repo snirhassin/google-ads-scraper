@@ -10,7 +10,7 @@
     <div class="container">
         <header>
             <h1>Google Ads Transparency Scraper</h1>
-            <p>Extract ad data from Google Ads Transparency pages using SerpAPI + Claude Vision OCR</p>
+            <p>Extract ad data from Google Ads Transparency pages using Apify + Claude Vision OCR</p>
         </header>
 
         <main>
@@ -29,9 +29,12 @@
                             <option value="apify" selected>Apify (default)</option>
                             <option value="serpapi">SerpAPI (faster for large advertisers)</option>
                         </select>
+                        <label for="max-results">Max Ads:</label>
+                        <input type="number" id="max-results" value="100" min="1" max="10000" style="width: 80px; padding: 8px; border: 2px solid #e0e0e0; border-radius: 6px; font-size: 14px;">
                     </div>
                     <div class="button-group">
                         <button id="start-btn" class="btn btn-primary">Start Scraping</button>
+                        <button id="stop-scrape-btn" class="btn btn-danger" style="display: none;">Stop & Save Results</button>
                         <button id="load-saved-btn" class="btn btn-secondary">Load Saved</button>
                     </div>
                 </div>
@@ -74,7 +77,7 @@
                     <div class="progress-phases" id="progress-phases">
                         <div class="phase active" id="phase-fetch">
                             <span class="phase-icon">●</span>
-                            <span class="phase-text">Fetching ads from SerpAPI (up to 5000)</span>
+                            <span class="phase-text">Fetching ads...</span>
                         </div>
                         <div class="phase" id="phase-details">
                             <span class="phase-icon">○</span>
@@ -136,7 +139,7 @@
         </main>
 
         <footer>
-            <p>Powered by <a href="https://serpapi.com" target="_blank">SerpAPI</a> + <a href="https://anthropic.com" target="_blank">Claude Vision</a></p>
+            <p>Powered by <a href="https://apify.com" target="_blank">Apify</a> + <a href="https://anthropic.com" target="_blank">Claude Vision</a></p>
         </footer>
     </div>
 
@@ -159,6 +162,7 @@
     <script>
         let scrapedAds = [];
         let currentMeta = {};
+        let scrapeAborted = false;
 
         const STORAGE_KEY = 'google-ads-scraper-sessions';
         const DB_NAME = 'GoogleAdsScraperDB';
@@ -294,6 +298,13 @@
             saveModal.style.display = 'none';
         });
 
+        const stopScrapeBtn = document.getElementById('stop-scrape-btn');
+        stopScrapeBtn.addEventListener('click', () => {
+            scrapeAborted = true;
+            stopScrapeBtn.textContent = 'Stopping...';
+            stopScrapeBtn.disabled = true;
+        });
+
         urlInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') startScraping();
         });
@@ -401,6 +412,10 @@
 
             // Show progress
             startBtn.disabled = true;
+            scrapeAborted = false;
+            stopScrapeBtn.style.display = 'inline-block';
+            stopScrapeBtn.textContent = 'Stop & Save Results';
+            stopScrapeBtn.disabled = false;
             progressSection.style.display = 'block';
             resultsSection.style.display = 'none';
             errorSection.style.display = 'none';
@@ -467,6 +482,7 @@
                 }
             } finally {
                 startBtn.disabled = false;
+                stopScrapeBtn.style.display = 'none';
                 progressSection.style.display = 'none';
             }
         }
@@ -526,7 +542,8 @@
 
         // Apify scraper (async with polling + live preview)
         async function scrapeWithApify(url) {
-            statusSpan.textContent = '[Apify] Starting scraper...';
+            const maxResults = parseInt(document.getElementById('max-results').value) || 100;
+            statusSpan.textContent = `[Apify] Starting scraper (max ${maxResults} ads)...`;
             document.getElementById('ads-count').textContent = 'Initializing...';
 
             // Start the run
@@ -535,7 +552,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     url,
-                    maxResults: 10000
+                    maxResults: maxResults
                 })
             });
 
@@ -563,8 +580,9 @@
             let lastAdsCount = 0;
             let lastPreviewUpdate = 0;
 
-            while (attempts < maxAttempts) {
+            while (attempts < maxAttempts && !scrapeAborted) {
                 await new Promise(r => setTimeout(r, 5000));  // Wait 5 seconds
+                if (scrapeAborted) break;
                 attempts++;
 
                 const elapsedMin = Math.floor((attempts * 5) / 60);
@@ -608,6 +626,25 @@
                             displayPartialResults(scrapedAds, totalFromDataset, true);
                         }
 
+                        // Auto-stop if we reached the target
+                        if (totalFromDataset >= maxResults) {
+                            console.log(`Reached target of ${maxResults} ads (got ${totalFromDataset}), stopping...`);
+                            statusSpan.textContent = `[Apify] Reached ${maxResults} ads target! Fetching final results...`;
+                            // Fetch all results from dataset
+                            const finalPoll = await fetch('/api/scrape-apify', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ runId, includePartialResults: true })
+                            });
+                            const finalData = await finalPoll.json();
+                            if (finalData.partialAds && finalData.partialAds.length > 0) {
+                                scrapedAds = finalData.partialAds;
+                            }
+                            document.getElementById('ads-count').textContent = `${scrapedAds.length} ads`;
+                            totalCount.textContent = scrapedAds.length;
+                            return;
+                        }
+
                         continue;
                     }
 
@@ -631,6 +668,14 @@
                     // Continue polling on network errors
                     if (attempts >= maxAttempts) throw pollError;
                 }
+            }
+
+            // If aborted, use whatever partial results we have
+            if (scrapeAborted && scrapedAds.length > 0) {
+                document.getElementById('ads-count').textContent = `${scrapedAds.length} ads (stopped)`;
+                totalCount.textContent = scrapedAds.length;
+                console.log(`Scraping stopped by user with ${scrapedAds.length} partial results`);
+                return;
             }
 
             throw new Error('Apify scraping timed out after 60 minutes');
@@ -1472,6 +1517,21 @@
 
         .btn-small.btn-danger {
             background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%);
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .btn-danger:hover {
+            opacity: 0.9;
         }
 
         .btn-warning {

@@ -116,9 +116,9 @@ async function pollRunStatus(client, runId, res, includePartialResults = false) 
 
           console.log(`Dataset has ${totalItems} items`);
 
-          // Fetch some items for preview (limit 50 to keep response small)
+          // Fetch items for preview (limit 200 to keep response manageable)
           if (totalItems > 0) {
-            const { items } = await client.dataset(run.defaultDatasetId).listItems({ limit: 50 });
+            const { items } = await client.dataset(run.defaultDatasetId).listItems({ limit: 200 });
             if (items && items.length > 0) {
               response.partialAds = items.map(item => transformApifyAd(item));
               console.log(`Returning ${response.partialAds.length} partial results (total: ${totalItems})`);
