@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Saved URLs - Google Ads Transparency Scraper</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Saved Advertiser URLs</h1>
+            <p>Manage advertiser configurations for automated scraping</p>
+            <nav style="margin-top: 15px;"><a href="index.html" style="color: white; text-decoration: underline; opacity: 0.9; font-size: 14px;">Back to Scraper</a></nav>
+        </header>
+
+        <main>
+            <!-- Add/Edit Form -->
+            <section class="input-section" id="url-form-section">
+                <h3 id="form-title" style="margin-bottom: 15px;">Add New Advertiser</h3>
+                <form id="saved-url-form">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="advertiser-name">Advertiser Name:</label>
+                            <input type="text" id="advertiser-name" placeholder="e.g., Amobeez" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="transparency-url">Google Ads Transparency URL:</label>
+                            <input type="url" id="transparency-url" placeholder="https://adstransparency.google.com/advertiser/AR..." required>
+                        </div>
+                        <div class="form-group">
+                            <label for="url-template">URL Template (for slug generation):</label>
+                            <input type="text" id="url-template" placeholder="https://buyereviews.com/product/">
+                            <small style="display: block; margin-top: 4px; font-size: 12px; color: #888;">Slugs from ad titles will be appended: template + slug + /</small>
+                        </div>
+                    </div>
+                    <div class="button-group" style="margin-top: 15px;">
+                        <button type="submit" class="btn btn-primary" id="save-url-btn">Save Advertiser</button>
+                        <button type="button" class="btn btn-secondary" id="cancel-edit-btn" style="display: none;">Cancel</button>
+                    </div>
+                </form>
+            </section>
+
+            <!-- Saved URLs List -->
+            <section class="results-section" id="urls-list-section" style="margin-top: 20px;">
+                <div class="results-header">
+                    <h3>Saved Advertisers (<span id="total-count">0</span>)</h3>
+                </div>
+                <div id="urls-list" style="margin-top: 15px;"></div>
+            </section>
+
+            <!-- Advertiser Sessions -->
+            <section class="saved-sessions-section" id="advertiser-sessions" style="display: none; margin-top: 20px;">
+                <div class="saved-sessions-header">
+                    <h3>Runs for <span id="selected-advertiser-name"></span></h3>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-small btn-primary" id="run-scrape-btn">Run New Scrape</button>
+                        <button class="btn btn-small btn-secondary" id="close-sessions-btn">Close</button>
+                    </div>
+                </div>
+                <div id="advertiser-sessions-list" style="margin-top: 15px;"></div>
+            </section>
+        </main>
+
+        <footer>
+            <p>Powered by <a href="https://apify.com" target="_blank">Apify</a> + <a href="https://anthropic.com" target="_blank">Claude Vision</a></p>
+        </footer>
+    </div>
+
+    <script>
+        // ===== IndexedDB Setup (same schema as index.html) =====
+        const DB_NAME = 'GoogleAdsScraperDB';
+        const DB_VERSION = 2;
+        const STORE_NAME = 'sessions';
+        const SAVED_URLS_STORE = 'savedUrls';
+        let db = null;
+        let editingId = null;
+        let selectedSavedUrl = null;
+
+        async function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                request.onerror = () => reject(request.error);
+                request.onsuccess = () => { db = request.result; resolve(db); };
+                request.onupgradeneeded = (event) => {
+                    const database = event.target.result;
+                    if (!database.objectStoreNames.contains(STORE_NAME)) {
+                        const store = database.createObjectStore(STORE_NAME, { keyPath: 'id' });
+                        store.createIndex('savedAt', 'savedAt', { unique: false });
+                    }
+                    if (!database.objectStoreNames.contains(SAVED_URLS_STORE)) {
+                        const urlStore = database.createObjectStore(SAVED_URLS_STORE, { keyPath: 'id' });
+                        urlStore.createIndex('advertiserName', 'advertiserName', { unique: false });
+                        urlStore.createIndex('transparencyUrl', 'transparencyUrl', { unique: false });
+                    }
+                };
+            });
+        }
+
+        // ===== SavedUrls CRUD =====
+        async function saveSavedUrlToDB(record) {
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction([SAVED_URLS_STORE], 'readwrite');
+                const store = tx.objectStore(SAVED_URLS_STORE);
+                const req = store.put(record);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        async function getAllSavedUrlsFromDB() {
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction([SAVED_URLS_STORE], 'readonly');
+                const store = tx.objectStore(SAVED_URLS_STORE);
+                const req = store.getAll();
+                req.onsuccess = () => resolve(req.result.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)));
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        async function getSavedUrlFromDB(id) {
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction([SAVED_URLS_STORE], 'readonly');
+                const store = tx.objectStore(SAVED_URLS_STORE);
+                const req = store.get(id);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        async function deleteSavedUrlFromDB(id) {
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction([SAVED_URLS_STORE], 'readwrite');
+                const store = tx.objectStore(SAVED_URLS_STORE);
+                const req = store.delete(id);
+                req.onsuccess = () => resolve();
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        // ===== Sessions CRUD (read-only) =====
+        async function getAllSessionsFromDB() {
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction([STORE_NAME], 'readonly');
+                const store = tx.objectStore(STORE_NAME);
+                const req = store.getAll();
+                req.onsuccess = () => resolve(req.result.sort((a, b) => new Date(b.savedAt) - new Date(a.savedAt)));
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        // ===== Utilities =====
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function truncateUrl(url, maxLength) {
+            if (!url || url.length <= maxLength) return url;
+            return url.substring(0, maxLength) + '...';
+        }
+
+        function showNotification(message) {
+            const notif = document.createElement('div');
+            notif.className = 'notification';
+            notif.textContent = message;
+            document.body.appendChild(notif);
+            setTimeout(() => notif.remove(), 3000);
+        }
+
+        // ===== Form Handling =====
+        const form = document.getElementById('saved-url-form');
+        const formTitle = document.getElementById('form-title');
+        const cancelBtn = document.getElementById('cancel-edit-btn');
+        const saveBtn = document.getElementById('save-url-btn');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const advertiserName = document.getElementById('advertiser-name').value.trim();
+            const transparencyUrl = document.getElementById('transparency-url').value.trim();
+            const urlTemplate = document.getElementById('url-template').value.trim();
+
+            if (!advertiserName || !transparencyUrl) return;
+
+            const record = {
+                id: editingId || Date.now(),
+                advertiserName,
+                transparencyUrl,
+                urlTemplate,
+                createdAt: editingId ? undefined : new Date().toISOString(),
+                lastRunAt: null
+            };
+
+            // If editing, preserve original createdAt and lastRunAt
+            if (editingId) {
+                const existing = await getSavedUrlFromDB(editingId);
+                if (existing) {
+                    record.createdAt = existing.createdAt;
+                    record.lastRunAt = existing.lastRunAt;
+                }
+            }
+
+            await saveSavedUrlToDB(record);
+            resetForm();
+            await renderSavedUrls();
+            showNotification(editingId ? 'Updated!' : 'Saved!');
+            editingId = null;
+        });
+
+        cancelBtn.addEventListener('click', () => {
+            resetForm();
+            editingId = null;
+        });
+
+        function resetForm() {
+            form.reset();
+            formTitle.textContent = 'Add New Advertiser';
+            saveBtn.textContent = 'Save Advertiser';
+            cancelBtn.style.display = 'none';
+        }
+
+        function startEdit(record) {
+            editingId = record.id;
+            document.getElementById('advertiser-name').value = record.advertiserName;
+            document.getElementById('transparency-url').value = record.transparencyUrl;
+            document.getElementById('url-template').value = record.urlTemplate || '';
+            formTitle.textContent = 'Edit Advertiser';
+            saveBtn.textContent = 'Update';
+            cancelBtn.style.display = 'inline-block';
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        // ===== List Rendering =====
+        async function renderSavedUrls() {
+            const list = document.getElementById('urls-list');
+            const countEl = document.getElementById('total-count');
+
+            try {
+                const urls = await getAllSavedUrlsFromDB();
+                countEl.textContent = urls.length;
+
+                if (urls.length === 0) {
+                    list.innerHTML = '<p style="text-align: center; color: #666; padding: 30px;">No saved advertisers yet. Add one above.</p>';
+                    return;
+                }
+
+                list.innerHTML = urls.map(u => `
+                    <div class="advertiser-card" data-id="${u.id}">
+                        <div class="advertiser-info" onclick="showSessions(${u.id})">
+                            <strong>${escapeHtml(u.advertiserName)}</strong>
+                            <div class="advertiser-meta">
+                                <span title="${escapeHtml(u.transparencyUrl)}">${escapeHtml(truncateUrl(u.transparencyUrl, 60))}</span>
+                                ${u.urlTemplate ? `<span class="template-badge">${escapeHtml(truncateUrl(u.urlTemplate, 40))}</span>` : ''}
+                            </div>
+                            <div class="advertiser-meta" style="margin-top: 4px;">
+                                <span>Added: ${new Date(u.createdAt).toLocaleDateString()}</span>
+                                ${u.lastRunAt ? `<span>Last run: ${new Date(u.lastRunAt).toLocaleString()}</span>` : '<span>Never run</span>'}
+                            </div>
+                        </div>
+                        <div class="advertiser-actions">
+                            <button class="btn btn-small btn-primary" onclick="event.stopPropagation(); showSessions(${u.id})">Sessions</button>
+                            <button class="btn btn-small btn-secondary" onclick="event.stopPropagation(); editUrl(${u.id})">Edit</button>
+                            <button class="btn btn-small btn-danger" onclick="event.stopPropagation(); deleteUrl(${u.id})">Delete</button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                list.innerHTML = `<p style="color: #c62828;">Error: ${e.message}</p>`;
+            }
+        }
+
+        // ===== Actions =====
+        async function editUrl(id) {
+            const record = await getSavedUrlFromDB(id);
+            if (record) startEdit(record);
+        }
+
+        async function deleteUrl(id) {
+            if (!confirm('Delete this saved advertiser?')) return;
+            await deleteSavedUrlFromDB(id);
+            await renderSavedUrls();
+            // Close sessions panel if it was showing this advertiser
+            if (selectedSavedUrl && selectedSavedUrl.id === id) {
+                document.getElementById('advertiser-sessions').style.display = 'none';
+                selectedSavedUrl = null;
+            }
+            showNotification('Deleted');
+        }
+
+        // ===== Sessions Panel =====
+        async function showSessions(savedUrlId) {
+            const savedUrl = await getSavedUrlFromDB(savedUrlId);
+            if (!savedUrl) return;
+
+            selectedSavedUrl = savedUrl;
+            const panel = document.getElementById('advertiser-sessions');
+            const nameEl = document.getElementById('selected-advertiser-name');
+            const listEl = document.getElementById('advertiser-sessions-list');
+
+            nameEl.textContent = savedUrl.advertiserName;
+            panel.style.display = 'block';
+
+            // Find sessions linked to this advertiser
+            const allSessions = await getAllSessionsFromDB();
+            const linked = allSessions.filter(s =>
+                s.savedUrlId === savedUrlId || s.url === savedUrl.transparencyUrl
+            );
+
+            if (linked.length === 0) {
+                listEl.innerHTML = '<p style="text-align: center; color: #666; padding: 20px;">No saved runs yet. Click "Run New Scrape" to start.</p>';
+            } else {
+                listEl.innerHTML = linked.map(s => {
+                    const ocrCount = s.ads?.filter(a => a.visionProcessed).length || 0;
+                    const slugCount = s.ads?.filter(a => a.slug).length || 0;
+                    return `
+                        <div class="saved-session-item">
+                            <div class="session-info">
+                                <strong>${escapeHtml(s.name)}</strong>
+                                <span class="session-meta">
+                                    ${s.adsCount} ads
+                                    ${ocrCount > 0 ? ` &bull; ${ocrCount} OCR'd` : ''}
+                                    ${slugCount > 0 ? ` &bull; ${slugCount} slugs` : ''}
+                                    &bull; ${new Date(s.savedAt).toLocaleString()}
+                                </span>
+                            </div>
+                            <div class="session-actions">
+                                <a href="index.html?loadSession=${s.id}" class="btn btn-small btn-primary" style="text-decoration: none;">Load in Scraper</a>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+        }
+
+        document.getElementById('close-sessions-btn').addEventListener('click', () => {
+            document.getElementById('advertiser-sessions').style.display = 'none';
+            selectedSavedUrl = null;
+        });
+
+        document.getElementById('run-scrape-btn').addEventListener('click', () => {
+            if (!selectedSavedUrl) return;
+            const url = encodeURIComponent(selectedSavedUrl.transparencyUrl);
+            window.location.href = `index.html?scrapeUrl=${url}&savedUrlId=${selectedSavedUrl.id}`;
+        });
+
+        // ===== Init =====
+        initDB().then(() => {
+            renderSavedUrls();
+        }).catch(err => {
+            console.error('Failed to init DB:', err);
+        });
+    </script>
+
+    <style>
+        .advertiser-card {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            transition: background 0.2s ease;
+            cursor: pointer;
+            background: white;
+        }
+        .advertiser-card:hover { background: #f8f9fa; }
+        .advertiser-info { flex: 1; }
+        .advertiser-info strong { display: block; font-size: 16px; margin-bottom: 4px; color: #333; }
+        .advertiser-meta { font-size: 12px; color: #666; display: flex; gap: 15px; flex-wrap: wrap; }
+        .advertiser-actions { display: flex; gap: 8px; flex-shrink: 0; }
+        .template-badge {
+            display: inline-block; padding: 2px 8px; background: #e3f2fd;
+            color: #1565c0; border-radius: 4px; font-size: 12px; font-family: monospace;
+        }
+        .form-row { display: flex; flex-direction: column; gap: 12px; }
+        .form-group { display: flex; flex-direction: column; }
+        .form-group label { font-weight: 600; margin-bottom: 6px; color: #333; }
+        .form-group input {
+            padding: 12px 15px; border: 2px solid #e1e5e9; border-radius: 8px;
+            font-size: 15px; transition: border-color 0.3s;
+        }
+        .form-group input:focus { outline: none; border-color: #667eea; }
+
+        .saved-session-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 12px; border: 1px solid #e0e0e0; border-radius: 6px; margin-bottom: 8px;
+        }
+        .saved-session-item:hover { background: #f8f9fa; }
+        .session-info strong { display: block; margin-bottom: 4px; }
+        .session-meta { font-size: 12px; color: #666; }
+        .session-actions { display: flex; gap: 8px; }
+
+        .notification {
+            position: fixed; bottom: 20px; right: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; padding: 15px 25px; border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2); z-index: 1001;
+            animation: slideIn 0.3s ease;
+        }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+        footer { text-align: center; padding: 20px; color: #666; font-size: 14px; }
+        footer a { color: #667eea; text-decoration: none; }
+        footer a:hover { text-decoration: underline; }
+    </style>
+</body>
+</html>

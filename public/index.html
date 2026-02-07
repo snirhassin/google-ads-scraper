@@ -11,6 +11,7 @@
         <header>
             <h1>Google Ads Transparency Scraper</h1>
             <p>Extract ad data from Google Ads Transparency pages using Apify + Claude Vision OCR</p>
+            <nav style="margin-top: 15px;"><a href="saved-urls.html" style="color: white; text-decoration: underline; opacity: 0.9; font-size: 14px;">Manage Saved URLs</a></nav>
         </header>
 
         <main>
@@ -40,6 +41,7 @@
                         <button id="start-btn" class="btn btn-primary">Start Scraping</button>
                         <button id="stop-scrape-btn" class="btn btn-danger" style="display: none;">Stop & Save Results</button>
                         <button id="load-saved-btn" class="btn btn-secondary">Load Saved</button>
+                        <a href="saved-urls.html" class="btn btn-secondary" style="text-decoration: none; text-align: center;">Saved URLs</a>
                     </div>
                 </div>
                 <div class="example-urls">
@@ -123,6 +125,8 @@
                                 <th>Visible Link</th>
                                 <th>Format</th>
                                 <th>Date Range</th>
+                                <th>Slug</th>
+                                <th>Generated URL</th>
                                 <th>OCR</th>
                                 <th>Details</th>
                             </tr>
@@ -167,11 +171,13 @@
         let scrapedAds = [];
         let currentMeta = {};
         let scrapeAborted = false;
+        let currentSavedUrl = null;
 
         const STORAGE_KEY = 'google-ads-scraper-sessions';
         const DB_NAME = 'GoogleAdsScraperDB';
-        const DB_VERSION = 1;
+        const DB_VERSION = 2;
         const STORE_NAME = 'sessions';
+        const SAVED_URLS_STORE = 'savedUrls';
         let db = null;
 
         // Initialize IndexedDB
@@ -190,6 +196,11 @@
                     if (!database.objectStoreNames.contains(STORE_NAME)) {
                         const store = database.createObjectStore(STORE_NAME, { keyPath: 'id' });
                         store.createIndex('savedAt', 'savedAt', { unique: false });
+                    }
+                    if (!database.objectStoreNames.contains(SAVED_URLS_STORE)) {
+                        const urlStore = database.createObjectStore(SAVED_URLS_STORE, { keyPath: 'id' });
+                        urlStore.createIndex('advertiserName', 'advertiserName', { unique: false });
+                        urlStore.createIndex('transparencyUrl', 'transparencyUrl', { unique: false });
                     }
                 };
             });
@@ -261,9 +272,78 @@
             });
         }
 
+        // ===== SavedUrls CRUD helpers =====
+        async function saveSavedUrlToDB(record) {
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction([SAVED_URLS_STORE], 'readwrite');
+                const store = tx.objectStore(SAVED_URLS_STORE);
+                const req = store.put(record);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        async function getAllSavedUrlsFromDB() {
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction([SAVED_URLS_STORE], 'readonly');
+                const store = tx.objectStore(SAVED_URLS_STORE);
+                const req = store.getAll();
+                req.onsuccess = () => resolve(req.result.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)));
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        async function getSavedUrlFromDB(id) {
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction([SAVED_URLS_STORE], 'readonly');
+                const store = tx.objectStore(SAVED_URLS_STORE);
+                const req = store.get(id);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        async function updateSavedUrlInDB(record) {
+            return saveSavedUrlToDB(record);
+        }
+
+        async function deleteSavedUrlFromDB(id) {
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction([SAVED_URLS_STORE], 'readwrite');
+                const store = tx.objectStore(SAVED_URLS_STORE);
+                const req = store.delete(id);
+                req.onsuccess = () => resolve();
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        async function findSavedUrlByTransparencyUrl(url) {
+            const all = await getAllSavedUrlsFromDB();
+            return all.find(r => r.transparencyUrl === url) || null;
+        }
+
         // Initialize DB on page load
-        initDB().then(() => {
-            migrateFromLocalStorage();
+        initDB().then(async () => {
+            await migrateFromLocalStorage();
+
+            // Handle incoming URL params from saved-urls.html
+            const params = new URLSearchParams(window.location.search);
+            const scrapeUrl = params.get('scrapeUrl');
+            if (scrapeUrl) {
+                urlInput.value = decodeURIComponent(scrapeUrl);
+                const savedUrlId = params.get('savedUrlId');
+                if (savedUrlId) {
+                    currentSavedUrl = await getSavedUrlFromDB(parseInt(savedUrlId));
+                }
+                // Clean URL params
+                window.history.replaceState({}, '', window.location.pathname);
+                startScraping();
+            }
+            const loadSessionId = params.get('loadSession');
+            if (loadSessionId) {
+                window.history.replaceState({}, '', window.location.pathname);
+                await loadSession(parseInt(loadSessionId));
+            }
         }).catch(err => {
             console.error('Failed to init IndexedDB:', err);
         });
@@ -431,6 +511,11 @@
 
             scrapedAds = [];
 
+            // Look up saved URL for slug generation
+            try {
+                if (db) currentSavedUrl = await findSavedUrlByTransparencyUrl(url);
+            } catch (e) { currentSavedUrl = null; }
+
             try {
                 if (scraperType === 'apify') {
                     // Use Apify scraper (single request, all ads at once)
@@ -586,7 +671,7 @@
             // Show results section early
             resultsSection.style.display = 'block';
             totalCount.textContent = '0';
-            resultsTableBody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: #667eea; padding: 40px;"><div class="scraping-indicator">Scraping in progress... Ads will appear here as they are collected.</div></td></tr>';
+            resultsTableBody.innerHTML = '<tr><td colspan="12" style="text-align: center; color: #667eea; padding: 40px;"><div class="scraping-indicator">Scraping in progress... Ads will appear here as they are collected.</div></td></tr>';
 
             // Parallel pipeline state
             let lastFetchedOffset = 0;
@@ -628,6 +713,13 @@
                                 if (result.data.brandName) ad.brandName = result.data.brandName;
                                 if (result.data.allText) ad.extractedText = result.data.allText;
                                 ad.visionProcessed = true;
+                                // Generate slug from headline
+                                if (ad.headline) {
+                                    ad.slug = generateSlug(ad.headline);
+                                    if (currentSavedUrl && currentSavedUrl.urlTemplate) {
+                                        ad.generatedUrl = buildFullUrl(currentSavedUrl.urlTemplate, ad.slug);
+                                    }
+                                }
                                 ocrSuccessful++;
                             } else {
                                 ad.visionProcessed = true;
@@ -813,7 +905,7 @@
                 const loadingRow = document.createElement('tr');
                 loadingRow.className = 'loading-more-row';
                 loadingRow.innerHTML = `
-                    <td colspan="10" style="text-align: center; padding: 20px; background: linear-gradient(135deg, #e8f5e9 0%, #e3f2fd 100%);">
+                    <td colspan="12" style="text-align: center; padding: 20px; background: linear-gradient(135deg, #e8f5e9 0%, #e3f2fd 100%);">
                         <div style="color: #667eea; font-weight: 600;">
                             ⏳ <span style="font-size: 18px;">${totalExpected}</span> ads collected so far... Still scraping!
                             <br><small style="font-weight: normal; color: #666;">Showing preview of first ${ads.length} ads</small>
@@ -866,6 +958,12 @@
             const ocr = getOcrStatus(ad);
             const ocrHtml = ocr.status === 'no-image' ? '-' : `<span class="ocr-status-badge ${ocr.cls}">${ocr.label}</span>`;
 
+            // Slug and generated URL
+            const slugHtml = ad.slug ? `<span class="slug-text">${escapeHtml(ad.slug)}</span>` : '-';
+            const genUrlHtml = ad.generatedUrl
+                ? `<a href="${ad.generatedUrl}" target="_blank" rel="noopener" class="visible-link">${escapeHtml(truncateUrl(ad.generatedUrl, 35))}</a>`
+                : '-';
+
             row.innerHTML = `
                 <td class="checkbox-col"><input type="checkbox" class="ad-checkbox" data-ad-id="${ad.id}"></td>
                 <td>${imageHtml}</td>
@@ -878,6 +976,8 @@
                 <td class="url-cell">${visibleLinkHtml}</td>
                 <td><span class="badge badge-${(ad.format || 'unknown').toLowerCase()}">${ad.format || 'Unknown'}</span></td>
                 <td class="date-cell">${ad.dateRange || '-'}</td>
+                <td class="slug-cell">${slugHtml}</td>
+                <td class="url-cell">${genUrlHtml}</td>
                 <td class="ocr-cell">${ocrHtml}</td>
                 <td>${detailsHtml}</td>
             `;
@@ -933,7 +1033,7 @@
             }
 
             if (scrapedAds.length === 0) {
-                resultsTableBody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: #666;">No ads found</td></tr>';
+                resultsTableBody.innerHTML = '<tr><td colspan="12" style="text-align: center; color: #666;">No ads found</td></tr>';
                 resultsSection.style.display = 'block';
                 return;
             }
@@ -969,6 +1069,7 @@
                 id: Date.now(),
                 name: name,
                 url: currentMeta.url || urlInput.value,
+                savedUrlId: currentSavedUrl ? currentSavedUrl.id : null,
                 adsCount: scrapedAds.length,
                 visionStats: currentMeta.visionStats,
                 savedAt: new Date().toISOString(),
@@ -979,6 +1080,10 @@
             try {
                 if (!db) await initDB();
                 await saveSessionToDB(session);
+                if (currentSavedUrl) {
+                    currentSavedUrl.lastRunAt = new Date().toISOString();
+                    await updateSavedUrlInDB(currentSavedUrl);
+                }
                 saveModal.style.display = 'none';
                 showNotification(`Saved "${name}" successfully!`);
             } catch (e) {
@@ -1106,6 +1211,8 @@
                     'Visible Link',
                     'Destination URL',
                     'AI Extracted Text',
+                    'Slug',
+                    'Generated URL',
                     'AI Processed',
                     'Format',
                     'Image URL',
@@ -1132,6 +1239,8 @@
                     ad.visibleLink || ad.displayUrl || '',
                     ad.destinationUrl || '',
                     ad.extractedText || '',
+                    ad.slug || '',
+                    ad.generatedUrl || '',
                     ad.visionProcessed ? 'Yes' : 'No',
                     ad.format || '',
                     ad.image || ad.imageUrl || '',
@@ -1210,6 +1319,23 @@
         function truncateUrl(url, maxLength) {
             if (!url || url.length <= maxLength) return url;
             return url.substring(0, maxLength) + '...';
+        }
+
+        function generateSlug(text) {
+            if (!text) return '';
+            return text.toLowerCase().trim()
+                .replace(/['']/g, '')
+                .replace(/&/g, 'and')
+                .replace(/[^a-z0-9\s-]/g, '')
+                .replace(/\s+/g, '-')
+                .replace(/-+/g, '-')
+                .replace(/^-|-$/g, '');
+        }
+
+        function buildFullUrl(urlTemplate, slug) {
+            if (!urlTemplate || !slug) return '';
+            const base = urlTemplate.endsWith('/') ? urlTemplate : urlTemplate + '/';
+            return base + slug + '/';
         }
 
         // Make functions available globally for onclick handlers
@@ -1362,6 +1488,13 @@
                                 if (result.data.brandName) ad.brandName = result.data.brandName;
                                 if (result.data.allText) ad.extractedText = result.data.allText;
                                 ad.visionProcessed = true;
+                                // Generate slug from headline
+                                if (ad.headline) {
+                                    ad.slug = generateSlug(ad.headline);
+                                    if (currentSavedUrl && currentSavedUrl.urlTemplate) {
+                                        ad.generatedUrl = buildFullUrl(currentSavedUrl.urlTemplate, ad.slug);
+                                    }
+                                }
                                 successful++;
                             } else {
                                 ad.visionProcessed = true;
@@ -2002,6 +2135,19 @@
         .ocr-pending {
             background: #fff3e0;
             color: #e65100;
+        }
+
+        /* Slug cell */
+        .slug-cell {
+            max-width: 150px;
+            font-size: 12px;
+            font-family: monospace;
+            word-break: break-all;
+        }
+
+        .slug-text {
+            color: #1565c0;
+            font-size: 11px;
         }
 
         /* OCR failed count in controls bar */
