@@ -658,17 +658,47 @@
                 totalCount.textContent = scrapedAds.length;
             }
 
+            // Helper: add new ads to scrapedAds, capped at maxResults. Returns the ads actually added.
+            function addNewAds(newAds) {
+                const remaining = maxResults - scrapedAds.length;
+                if (remaining <= 0) return [];
+                const toAdd = newAds.slice(0, remaining);
+                scrapedAds = scrapedAds.concat(toAdd);
+                lastFetchedOffset += newAds.length; // advance offset by full fetch (even if we cap)
+                return toAdd;
+            }
+
+            // Helper: fire OCR for newly added ads that have images
+            function ocrNewAds(addedAds) {
+                const withImages = addedAds.filter(
+                    ad => (ad.image || ad.imageUrl) && !ocrProcessedIds.has(ad.id)
+                );
+                if (withImages.length > 0 && !scrapeAborted) {
+                    pendingOcrPromises.push(fireOcrBatch(withImages));
+                }
+            }
+
             // Poll loop
             let attempts = 0;
             const maxAttempts = 720;  // 60 minutes max (5s intervals)
 
             while (attempts < maxAttempts && !scrapeAborted) {
+                // Stop early if we already have enough
+                if (scrapedAds.length >= maxResults) {
+                    console.log(`Already have ${scrapedAds.length}/${maxResults} ads, stopping.`);
+                    runFinished = true;
+                    break;
+                }
+
                 await new Promise(r => setTimeout(r, 5000));
                 if (scrapeAborted) break;
                 attempts++;
 
                 try {
-                    // Fetch new ads incrementally from the offset
+                    // Only fetch what we still need
+                    const needed = maxResults - scrapedAds.length;
+                    const fetchLimit = Math.min(BATCH_SIZE, needed);
+
                     const pollResponse = await fetch('/api/scrape-apify', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -676,73 +706,36 @@
                             runId,
                             includePartialResults: true,
                             offset: lastFetchedOffset,
-                            limit: BATCH_SIZE
+                            limit: fetchLimit
                         })
                     });
 
                     const pollData = await pollResponse.json();
                     const totalInDataset = pollData.total || pollData.stats?.itemsScraped || 0;
 
-                    // Add new ads from this batch
+                    // Add new ads (capped)
                     if (pollData.partialAds && pollData.partialAds.length > 0) {
-                        scrapedAds = scrapedAds.concat(pollData.partialAds);
-                        lastFetchedOffset += pollData.partialAds.length;
-
-                        // Fire OCR for new ads that have images
-                        const newAdsWithImages = pollData.partialAds.filter(
-                            ad => (ad.image || ad.imageUrl) && !ocrProcessedIds.has(ad.id)
-                        );
-                        if (newAdsWithImages.length > 0 && !scrapeAborted) {
-                            pendingOcrPromises.push(fireOcrBatch(newAdsWithImages));
-                        }
-
+                        const added = addNewAds(pollData.partialAds);
+                        ocrNewAds(added);
                         updatePipelineStatus();
-                        displayPartialResults(scrapedAds, totalInDataset || scrapedAds.length, true);
-                    } else if (totalInDataset > lastFetchedOffset) {
-                        // There are more items but this fetch returned empty - dataset may be lagging
-                        // Will retry on next poll
+                        displayPartialResults(scrapedAds, Math.min(totalInDataset, maxResults), true);
+                    }
+
+                    // Check if we've hit the cap
+                    if (scrapedAds.length >= maxResults) {
+                        console.log(`Reached ${maxResults} cap after fetch.`);
+                        runFinished = true;
+                        break;
                     }
 
                     if (pollData.status === 'RUNNING' || pollData.status === 'READY') {
-                        // Auto-stop if we reached the target
-                        if (totalInDataset >= maxResults || scrapedAds.length >= maxResults) {
-                            console.log(`Reached target of ${maxResults} ads, fetching remaining...`);
-                            // Fetch any remaining ads we haven't fetched yet
-                            while (lastFetchedOffset < Math.min(totalInDataset, maxResults)) {
-                                const moreResponse = await fetch('/api/scrape-apify', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({
-                                        runId,
-                                        includePartialResults: true,
-                                        offset: lastFetchedOffset,
-                                        limit: BATCH_SIZE
-                                    })
-                                });
-                                const moreData = await moreResponse.json();
-                                if (moreData.partialAds && moreData.partialAds.length > 0) {
-                                    scrapedAds = scrapedAds.concat(moreData.partialAds);
-                                    lastFetchedOffset += moreData.partialAds.length;
-
-                                    const newWithImages = moreData.partialAds.filter(
-                                        ad => (ad.image || ad.imageUrl) && !ocrProcessedIds.has(ad.id)
-                                    );
-                                    if (newWithImages.length > 0) {
-                                        pendingOcrPromises.push(fireOcrBatch(newWithImages));
-                                    }
-                                } else {
-                                    break;
-                                }
-                            }
-                            runFinished = true;
-                            break;
-                        }
                         continue;
                     }
 
                     if (pollData.status === 'SUCCEEDED' || pollData.status === 'TIMED-OUT') {
-                        // Run finished - fetch all remaining ads
-                        while (lastFetchedOffset < totalInDataset) {
+                        // Run finished - fetch remaining ads up to cap
+                        while (scrapedAds.length < maxResults && lastFetchedOffset < totalInDataset) {
+                            const needed2 = maxResults - scrapedAds.length;
                             const finalResponse = await fetch('/api/scrape-apify', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
@@ -750,20 +743,13 @@
                                     runId,
                                     includePartialResults: true,
                                     offset: lastFetchedOffset,
-                                    limit: BATCH_SIZE
+                                    limit: Math.min(BATCH_SIZE, needed2)
                                 })
                             });
                             const finalData = await finalResponse.json();
                             if (finalData.partialAds && finalData.partialAds.length > 0) {
-                                scrapedAds = scrapedAds.concat(finalData.partialAds);
-                                lastFetchedOffset += finalData.partialAds.length;
-
-                                const newWithImages = finalData.partialAds.filter(
-                                    ad => (ad.image || ad.imageUrl) && !ocrProcessedIds.has(ad.id)
-                                );
-                                if (newWithImages.length > 0) {
-                                    pendingOcrPromises.push(fireOcrBatch(newWithImages));
-                                }
+                                const added = addNewAds(finalData.partialAds);
+                                ocrNewAds(added);
                             } else {
                                 break;
                             }
