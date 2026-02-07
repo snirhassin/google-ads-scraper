@@ -103,9 +103,11 @@
                 </div>
                 <div class="ocr-controls" id="ocr-controls" style="display: none;">
                     <span class="ocr-label">AI Text Extraction:</span>
-                    <button id="start-ocr-btn" class="btn btn-primary">Re-run OCR</button>
-                    <button id="stop-ocr-btn" class="btn btn-secondary" style="display: none;">Stop OCR</button>
                     <span id="ocr-progress-display"><span id="ocr-progress">0/0</span> processed</span>
+                    <span id="ocr-failed-count" class="ocr-failed-count" style="display: none;"></span>
+                    <button id="rerun-failed-btn" class="btn btn-danger btn-small" style="display: none;">Re-run Failed</button>
+                    <button id="rerun-selected-btn" class="btn btn-primary btn-small" style="display: none;">Re-run Selected (0)</button>
+                    <button id="stop-ocr-btn" class="btn btn-secondary btn-small" style="display: none;">Stop OCR</button>
                     <span id="ocr-status"></span>
                 </div>
                 <div class="results-meta" id="results-meta"></div>
@@ -113,6 +115,7 @@
                     <table id="results-table">
                         <thead>
                             <tr>
+                                <th class="checkbox-col"><input type="checkbox" id="select-all-ads" title="Select all"></th>
                                 <th>Image</th>
                                 <th>Advertiser</th>
                                 <th>Title / Headline</th>
@@ -120,6 +123,7 @@
                                 <th>Visible Link</th>
                                 <th>Format</th>
                                 <th>Date Range</th>
+                                <th>OCR</th>
                                 <th>Details</th>
                             </tr>
                         </thead>
@@ -582,7 +586,7 @@
             // Show results section early
             resultsSection.style.display = 'block';
             totalCount.textContent = '0';
-            resultsTableBody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #667eea; padding: 40px;"><div class="scraping-indicator">Scraping in progress... Ads will appear here as they are collected.</div></td></tr>';
+            resultsTableBody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: #667eea; padding: 40px;"><div class="scraping-indicator">Scraping in progress... Ads will appear here as they are collected.</div></td></tr>';
 
             // Parallel pipeline state
             let lastFetchedOffset = 0;
@@ -823,7 +827,7 @@
                 const loadingRow = document.createElement('tr');
                 loadingRow.className = 'loading-more-row';
                 loadingRow.innerHTML = `
-                    <td colspan="8" style="text-align: center; padding: 20px; background: linear-gradient(135deg, #e8f5e9 0%, #e3f2fd 100%);">
+                    <td colspan="10" style="text-align: center; padding: 20px; background: linear-gradient(135deg, #e8f5e9 0%, #e3f2fd 100%);">
                         <div style="color: #667eea; font-weight: 600;">
                             ⏳ <span style="font-size: 18px;">${totalExpected}</span> ads collected so far... Still scraping!
                             <br><small style="font-weight: normal; color: #666;">Showing preview of first ${ads.length} ads</small>
@@ -834,9 +838,20 @@
             }
         }
 
+        // Determine OCR status for an ad
+        function getOcrStatus(ad) {
+            const hasImage = ad.image || ad.imageUrl;
+            if (!hasImage) return { status: 'no-image', label: '-', cls: '' };
+            const hasText = (ad.headline && ad.headline !== '-') || (ad.description && ad.description !== '-') || ad.extractedText;
+            if (hasText) return { status: 'success', label: 'OK', cls: 'ocr-ok' };
+            if (ad.visionProcessed) return { status: 'failed', label: 'Failed', cls: 'ocr-failed' };
+            return { status: 'pending', label: 'Pending', cls: 'ocr-pending' };
+        }
+
         // Create a table row for an ad (reusable function)
         function createAdRow(ad) {
             const row = document.createElement('tr');
+            row.dataset.adId = ad.id;
 
             // Image
             const imageHtml = ad.image || ad.imageUrl
@@ -861,7 +876,12 @@
                 ? `title="${escapeHtml(ad.extractedText.substring(0, 500))}"`
                 : '';
 
+            // OCR status
+            const ocr = getOcrStatus(ad);
+            const ocrHtml = ocr.status === 'no-image' ? '-' : `<span class="ocr-status-badge ${ocr.cls}">${ocr.label}</span>`;
+
             row.innerHTML = `
+                <td class="checkbox-col"><input type="checkbox" class="ad-checkbox" data-ad-id="${ad.id}"></td>
                 <td>${imageHtml}</td>
                 <td>
                     <strong>${escapeHtml(advertiserName)}</strong>
@@ -872,6 +892,7 @@
                 <td class="url-cell">${visibleLinkHtml}</td>
                 <td><span class="badge badge-${(ad.format || 'unknown').toLowerCase()}">${ad.format || 'Unknown'}</span></td>
                 <td class="date-cell">${ad.dateRange || '-'}</td>
+                <td class="ocr-cell">${ocrHtml}</td>
                 <td>${detailsHtml}</td>
             `;
 
@@ -882,24 +903,39 @@
             resultsTableBody.innerHTML = '';
             totalCount.textContent = scrapedAds.length;
 
+            // Count OCR statuses
+            const adsWithImages = scrapedAds.filter(ad => ad.image || ad.imageUrl);
+            const adsProcessed = adsWithImages.filter(ad => ad.visionProcessed);
+            const adsFailed = adsWithImages.filter(ad => getOcrStatus(ad).status === 'failed');
+            const adsOk = adsWithImages.filter(ad => getOcrStatus(ad).status === 'success');
+
             // Show vision stats
-            if (currentMeta.visionStats && currentMeta.visionStats.attempted > 0) {
-                const vs = currentMeta.visionStats;
-                visionStats.innerHTML = `<span class="vision-badge">AI OCR: ${vs.successful}/${vs.attempted}</span>`;
+            if (adsProcessed.length > 0) {
+                visionStats.innerHTML = `<span class="vision-badge">AI OCR: ${adsOk.length}/${adsWithImages.length} OK</span>`;
             } else {
                 visionStats.innerHTML = '';
             }
 
-            // Update OCR controls - only show if some ads weren't processed
-            const adsWithImages = scrapedAds.filter(ad => ad.image || ad.imageUrl).length;
-            const adsProcessed = scrapedAds.filter(ad => ad.visionProcessed).length;
-            const ocrProgress = document.getElementById('ocr-progress');
-            if (ocrProgress) {
-                ocrProgress.textContent = `${adsProcessed}/${adsWithImages}`;
+            // Update OCR controls
+            const ocrProgressEl = document.getElementById('ocr-progress');
+            if (ocrProgressEl) {
+                ocrProgressEl.textContent = `${adsProcessed.length}/${adsWithImages.length}`;
             }
             const ocrControls = document.getElementById('ocr-controls');
             if (ocrControls) {
-                ocrControls.style.display = (adsWithImages > 0 && adsProcessed < adsWithImages) ? 'flex' : 'none';
+                ocrControls.style.display = adsWithImages.length > 0 ? 'flex' : 'none';
+            }
+
+            // Show/hide failed count and re-run failed button
+            const failedCountEl = document.getElementById('ocr-failed-count');
+            const rerunFailedBtn = document.getElementById('rerun-failed-btn');
+            if (adsFailed.length > 0) {
+                failedCountEl.textContent = `${adsFailed.length} failed`;
+                failedCountEl.style.display = 'inline';
+                rerunFailedBtn.style.display = 'inline-block';
+            } else {
+                failedCountEl.style.display = 'none';
+                rerunFailedBtn.style.display = 'none';
             }
 
             // Show metadata
@@ -911,7 +947,7 @@
             }
 
             if (scrapedAds.length === 0) {
-                resultsTableBody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #666;">No ads found</td></tr>';
+                resultsTableBody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: #666;">No ads found</td></tr>';
                 resultsSection.style.display = 'block';
                 return;
             }
@@ -922,6 +958,11 @@
             });
 
             resultsSection.style.display = 'block';
+
+            // Reset select-all checkbox
+            const selectAll = document.getElementById('select-all-ads');
+            if (selectAll) selectAll.checked = false;
+            updateSelectedCount();
         }
 
         // Save/Load Functions (using IndexedDB for large storage)
@@ -1189,13 +1230,46 @@
         window.loadSession = loadSession;
         window.deleteSession = deleteSession;
 
-        // ===== BATCHED OCR PROCESSING (manual re-run) =====
+        // ===== CHECKBOX SELECTION =====
+        function updateSelectedCount() {
+            const checked = document.querySelectorAll('.ad-checkbox:checked');
+            const rerunSelectedBtn = document.getElementById('rerun-selected-btn');
+            if (rerunSelectedBtn) {
+                if (checked.length > 0) {
+                    rerunSelectedBtn.textContent = `Re-run Selected (${checked.length})`;
+                    rerunSelectedBtn.style.display = 'inline-block';
+                } else {
+                    rerunSelectedBtn.style.display = 'none';
+                }
+            }
+        }
+
+        // Select-all checkbox
+        document.getElementById('select-all-ads')?.addEventListener('change', function() {
+            const checkboxes = document.querySelectorAll('.ad-checkbox');
+            checkboxes.forEach(cb => cb.checked = this.checked);
+            updateSelectedCount();
+        });
+
+        // Delegate checkbox change events
+        document.getElementById('results-tbody')?.addEventListener('change', function(e) {
+            if (e.target.classList.contains('ad-checkbox')) {
+                updateSelectedCount();
+                // Uncheck select-all if any individual is unchecked
+                const allBoxes = document.querySelectorAll('.ad-checkbox');
+                const allChecked = [...allBoxes].every(cb => cb.checked);
+                document.getElementById('select-all-ads').checked = allChecked;
+            }
+        });
+
+        // ===== BATCHED OCR PROCESSING =====
         let ocrRunning = false;
         let ocrAborted = false;
         let retryCount = 0;
         const MAX_RETRIES = 3;
 
-        document.getElementById('start-ocr-btn')?.addEventListener('click', startBatchedOcr);
+        document.getElementById('rerun-failed-btn')?.addEventListener('click', () => rerunOcrForAds('failed'));
+        document.getElementById('rerun-selected-btn')?.addEventListener('click', () => rerunOcrForAds('selected'));
         document.getElementById('stop-ocr-btn')?.addEventListener('click', stopOcr);
 
         function stopOcr() {
@@ -1203,104 +1277,108 @@
             document.getElementById('ocr-status').textContent = 'Stopping...';
         }
 
-        async function startBatchedOcr() {
+        // Rerun OCR for failed or selected ads
+        async function rerunOcrForAds(mode) {
             if (ocrRunning || scrapedAds.length === 0) return;
+
+            let adsToProcess = [];
+            if (mode === 'failed') {
+                // Get ads where OCR was attempted but no text was extracted
+                adsToProcess = scrapedAds.filter(ad => {
+                    const ocr = getOcrStatus(ad);
+                    return ocr.status === 'failed';
+                });
+            } else if (mode === 'selected') {
+                const checkedIds = [...document.querySelectorAll('.ad-checkbox:checked')].map(cb => cb.dataset.adId);
+                adsToProcess = scrapedAds.filter(ad => checkedIds.includes(String(ad.id)));
+            }
+
+            if (adsToProcess.length === 0) {
+                document.getElementById('ocr-status').textContent = 'No ads to process.';
+                return;
+            }
+
+            // Reset visionProcessed so they get re-processed
+            adsToProcess.forEach(ad => {
+                ad.visionProcessed = false;
+                ad.headline = '';
+                ad.description = '';
+                ad.extractedText = '';
+                ad.visionError = null;
+            });
+
+            await runBatchedOcr(adsToProcess);
+        }
+
+        async function runBatchedOcr(adsToOcr) {
+            if (ocrRunning) return;
 
             ocrRunning = true;
             ocrAborted = false;
             retryCount = 0;
 
-            const startOcrBtn = document.getElementById('start-ocr-btn');
             const stopOcrBtn = document.getElementById('stop-ocr-btn');
+            const rerunFailedBtn = document.getElementById('rerun-failed-btn');
+            const rerunSelectedBtn = document.getElementById('rerun-selected-btn');
             const ocrStatus = document.getElementById('ocr-status');
-            const ocrProgress = document.getElementById('ocr-progress');
+            const ocrProgressEl = document.getElementById('ocr-progress');
 
-            startOcrBtn.style.display = 'none';
             stopOcrBtn.style.display = 'inline-block';
+            rerunFailedBtn.style.display = 'none';
+            rerunSelectedBtn.style.display = 'none';
 
-            // Get ads that need OCR (have image but no extracted text)
-            const adsWithImages = scrapedAds.filter(ad => ad.image || ad.imageUrl);
-            const adsNeedingOcr = adsWithImages.filter(ad => !ad.visionProcessed);
-            const alreadyProcessed = adsWithImages.length - adsNeedingOcr.length;
+            const totalToProcess = adsToOcr.length;
+            ocrStatus.textContent = `Starting OCR for ${totalToProcess} ads...`;
 
-            console.log(`OCR Status: ${adsWithImages.length} ads with images, ${alreadyProcessed} already processed, ${adsNeedingOcr.length} remaining`);
-
-            if (adsNeedingOcr.length === 0) {
-                ocrStatus.textContent = `All ${alreadyProcessed} ads with images already processed!`;
-                ocrRunning = false;
-                startOcrBtn.style.display = 'inline-block';
-                stopOcrBtn.style.display = 'none';
-                return;
-            }
-
-            ocrStatus.textContent = `Starting OCR for ${adsNeedingOcr.length} remaining ads...`;
-
-            const batchSize = 100; // Process 100 ads per API call (using fast Haiku model)
+            const batchSize = 100;
             let processed = 0;
             let successful = 0;
             let failed = 0;
             let errors = [];
 
-            // Show total including already processed
-            const totalWithImages = adsWithImages.length;
-            ocrProgress.textContent = `${alreadyProcessed}/${totalWithImages}`;
-
-            for (let i = 0; i < adsNeedingOcr.length && !ocrAborted; i += batchSize) {
-                const batch = adsNeedingOcr.slice(i, i + batchSize);
+            for (let i = 0; i < adsToOcr.length && !ocrAborted; i += batchSize) {
+                const batch = adsToOcr.slice(i, i + batchSize);
                 const batchData = batch.map(ad => ({
                     id: ad.id,
                     imageUrl: ad.image || ad.imageUrl
                 }));
 
                 const batchNum = Math.floor(i / batchSize) + 1;
-                const totalBatches = Math.ceil(adsNeedingOcr.length / batchSize);
+                const totalBatches = Math.ceil(adsToOcr.length / batchSize);
                 ocrStatus.textContent = `Batch ${batchNum}/${totalBatches} (${batch.length} ads)...`;
 
                 try {
-                    console.log(`Sending batch ${batchNum} with ${batchData.length} ads`);
-
                     const response = await fetch('/api/ocr-batch', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ ads: batchData })
                     });
 
-                    console.log(`Response status: ${response.status}`);
-
                     const contentType = response.headers.get('content-type');
                     if (!contentType || !contentType.includes('application/json')) {
                         const text = await response.text();
-                        console.error('Non-JSON response:', text.slice(0, 200));
                         throw new Error(text.slice(0, 100) || 'Server error');
                     }
 
                     const data = await response.json();
-                    console.log(`Batch result: ${data.stats?.successful || 0} successful, ${data.stats?.failed || 0} failed`);
-
-                    if (data.error) {
-                        throw new Error(data.error);
-                    }
+                    if (data.error) throw new Error(data.error);
 
                     if (data.results) {
-                        // Apply OCR results to ads
                         data.results.forEach(result => {
                             const ad = scrapedAds.find(a => a.id === result.id);
-                            if (!ad) {
-                                console.warn(`Ad not found: ${result.id}`);
-                                return;
-                            }
+                            if (!ad) return;
 
                             if (result.success && result.data) {
-                                if (result.data.headline && !ad.headline) ad.headline = result.data.headline;
-                                if (result.data.description && !ad.description) ad.description = result.data.description;
-                                if (result.data.callToAction && !ad.callToAction) ad.callToAction = result.data.callToAction;
-                                if (result.data.visibleUrl && !ad.visibleLink) ad.visibleLink = result.data.visibleUrl;
+                                if (result.data.headline) ad.headline = result.data.headline;
+                                if (result.data.description) ad.description = result.data.description;
+                                if (result.data.callToAction) ad.callToAction = result.data.callToAction;
+                                if (result.data.visibleUrl) ad.visibleLink = result.data.visibleUrl;
                                 if (result.data.brandName) ad.brandName = result.data.brandName;
                                 if (result.data.allText) ad.extractedText = result.data.allText;
                                 ad.visionProcessed = true;
                                 successful++;
                             } else {
-                                ad.visionProcessed = true; // Mark as processed even if failed
+                                ad.visionProcessed = true;
                                 ad.visionError = result.error || 'Unknown error';
                                 failed++;
                                 if (errors.length < 5) errors.push(result.error);
@@ -1309,21 +1387,12 @@
                     }
 
                     processed += batch.length;
-                    retryCount = 0; // Reset retry count on success
+                    retryCount = 0;
 
-                    // Update progress to show total (already processed + newly processed)
-                    const totalProcessed = alreadyProcessed + processed;
-                    ocrProgress.textContent = `${totalProcessed}/${totalWithImages}`;
+                    ocrProgressEl.textContent = `${processed}/${totalToProcess}`;
 
-                    // Update vision stats
-                    currentMeta.visionStats = {
-                        successful: alreadyProcessed + successful,
-                        attempted: alreadyProcessed + processed,
-                        failed
-                    };
-
-                    // Refresh display periodically (not every batch to avoid flicker)
-                    if (batchNum % 3 === 0 || i + batchSize >= adsNeedingOcr.length) {
+                    // Refresh display periodically
+                    if (batchNum % 3 === 0 || i + batchSize >= adsToOcr.length) {
                         displayResults();
                     }
 
@@ -1340,26 +1409,21 @@
                     } else {
                         ocrStatus.textContent = `Error: ${error.message}. Retry ${retryCount}/${MAX_RETRIES} in 5s...`;
                         await new Promise(r => setTimeout(r, 5000));
-                        i -= batchSize; // Retry this batch
+                        i -= batchSize;
                     }
                 }
             }
 
             ocrRunning = false;
-            startOcrBtn.style.display = 'inline-block';
             stopOcrBtn.style.display = 'none';
 
             // Final display refresh
             displayResults();
 
-            const totalProcessed = alreadyProcessed + processed;
             if (ocrAborted) {
-                ocrStatus.textContent = `Stopped. ${totalProcessed}/${totalWithImages} processed (${successful} new)`;
+                ocrStatus.textContent = `Stopped. ${processed}/${totalToProcess} processed (${successful} OK, ${failed} failed)`;
             } else {
-                ocrStatus.textContent = `Done! ${totalProcessed}/${totalWithImages} processed. ${failed > 0 ? `${failed} failed.` : ''}`;
-                if (errors.length > 0) {
-                    console.log('Sample errors:', errors);
-                }
+                ocrStatus.textContent = `Done! ${successful}/${totalToProcess} succeeded. ${failed > 0 ? `${failed} still failed.` : ''}`;
             }
 
             ocrAborted = false;
@@ -1909,6 +1973,59 @@
 
         .loading-more-row td {
             border-top: 2px dashed #667eea !important;
+        }
+
+        /* Checkbox column */
+        .checkbox-col {
+            width: 30px;
+            text-align: center;
+            padding: 4px !important;
+        }
+
+        .ad-checkbox, #select-all-ads {
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+            accent-color: #667eea;
+        }
+
+        /* OCR status badges */
+        .ocr-cell {
+            text-align: center;
+            white-space: nowrap;
+        }
+
+        .ocr-status-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .ocr-ok {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+
+        .ocr-failed {
+            background: #ffebee;
+            color: #c62828;
+        }
+
+        .ocr-pending {
+            background: #fff3e0;
+            color: #e65100;
+        }
+
+        /* OCR failed count in controls bar */
+        .ocr-failed-count {
+            font-size: 13px;
+            font-weight: 600;
+            color: #c62828;
+            background: #ffebee;
+            padding: 4px 10px;
+            border-radius: 4px;
         }
     </style>
 </body>
